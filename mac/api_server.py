@@ -27,7 +27,7 @@ except ImportError:
 
 # Import Discogs lookup and QR generation
 try:
-    from discogs_lookup import search_discogs, DiscogsResult, HAS_CREDENTIALS as DISCOGS_HAS_CREDS
+    from discogs_lookup import HAS_CREDENTIALS as DISCOGS_HAS_CREDS, search_discogs
     DISCOGS_ENABLED = True
 except ImportError:
     DISCOGS_ENABLED = False
@@ -189,7 +189,7 @@ def check_process(name: str) -> bool:
     """Check if process is running."""
     try:
         return subprocess.run(["pgrep", "-f", name], capture_output=True, timeout=5).returncode == 0
-    except:
+    except Exception:
         return False
 
 
@@ -197,7 +197,7 @@ def check_url(url: str, timeout: int = 2) -> bool:
     """Check if URL responds."""
     try:
         return urllib.request.urlopen(url, timeout=timeout).status == 200
-    except:
+    except Exception:
         return False
 
 
@@ -345,7 +345,7 @@ def get_messages(limit: int = 20) -> list[dict]:
             {"message": m["message"], "timestamp": m["timestamp"], "read": m.get("read", False)}
             for m in reversed(messages[-limit:])
         ]
-    except:
+    except Exception:
         return []
 
 
@@ -365,23 +365,18 @@ def get_schedule_info() -> dict:
         now = datetime.now()
         current = schedule.resolve(now)
 
-        # Find upcoming shows (next 4 hours)
+        # Find exact upcoming airings. next_airings() includes the current one first.
         upcoming = []
-        for minutes_ahead in range(30, 241, 30):
-            from datetime import timedelta
-            future = now + timedelta(minutes=minutes_ahead)
-            try:
-                future_show = schedule.resolve(future)
-                if not upcoming or upcoming[-1]["show_id"] != future_show.show_id:
-                    upcoming.append({
-                        "show_id": future_show.show_id,
-                        "name": future_show.name,
-                        "host": future_show.host,
-                        "topic_focus": future_show.topic_focus,
-                        "starts_around": future.strftime("%H:%M"),
-                    })
-            except Exception:
-                pass
+        for future_show_id, starts_at in schedule.next_airings(now=now, count=5)[1:]:
+            future_show = schedule.shows[future_show_id]
+            upcoming.append({
+                "show_id": future_show.show_id,
+                "name": future_show.name,
+                "host": future_show.host,
+                "topic_focus": future_show.topic_focus,
+                "starts_at": starts_at.isoformat(),
+                "starts_around": starts_at.strftime("%H:%M"),
+            })
 
         return {
             "current": {
