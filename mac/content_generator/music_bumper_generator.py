@@ -21,7 +21,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "mac"))
 
-from music_gen_client import MUSIC_GEN_BASE_URL, generate_music, is_server_available
+from music_gen_client import MUSIC_GEN_BASE_URL, generate_music, is_server_available  # noqa: E402
 
 BUMPERS_DIR = PROJECT_ROOT / "output" / "music_bumpers"
 

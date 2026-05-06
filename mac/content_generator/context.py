@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,6 @@ OUTPUT_DIR = PROJECT_ROOT / "output" / "talk_segments"
 SHOW_LOG_DIR = PROJECT_ROOT / "output" / "show_logs"
 INTENT_DIR = PROJECT_ROOT / "output" / "operator_intents"
 
-import sys
 sys.path.insert(0, str(PROJECT_ROOT / "mac"))
 from schedule import load_schedule, slot_key  # noqa: E402
 

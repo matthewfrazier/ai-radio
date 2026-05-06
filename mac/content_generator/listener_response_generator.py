@@ -43,7 +43,7 @@ SCRIPTS_DIR = PROJECT_ROOT / "output" / "scripts"
 MESSAGES_FILE = Path.home() / ".writ" / "messages.json"
 
 sys.path.insert(0, str(PROJECT_ROOT / "mac"))
-from schedule import load_schedule, slot_key
+from schedule import load_schedule, slot_key  # noqa: E402
 
 # Short segments for quick turnaround
 WORD_TARGET_SINGLE = (100, 200)   # One message: short personal reply
