@@ -31,13 +31,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import random
-import subprocess
 import sys
 import time
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -55,12 +52,12 @@ SHOW_LOG_DIR = PROJECT_ROOT / "output" / "show_logs"
 MESSAGES_FILE = Path.home() / ".writ" / "messages.json"
 
 sys.path.insert(0, str(PROJECT_ROOT / "mac"))
-from schedule import load_schedule, StationSchedule, slot_key, parse_slot_key
+from schedule import load_schedule, StationSchedule, slot_key, parse_slot_key  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent))
-from persona import HOSTS, get_host, build_host_prompt, STATION_NAME
-from context import load_intent, format_prompt_context
-from ledger import append_event, event_id
+from persona import build_host_prompt  # noqa: E402
+from context import load_intent, format_prompt_context  # noqa: E402
+from ledger import append_event, event_id  # noqa: E402
 
 # =============================================================================
 # SEGMENT TYPE DEFINITIONS
@@ -297,7 +294,7 @@ def format_show_log_for_prompt(show_id: str) -> str:
     entries = read_show_log(show_id)
     if not entries:
         return ""
-    lines = ["RECENT EPISODES (what you've covered recently — reference these, build on them, don't repeat):"]
+    lines = ["RECENT EPISODES (already covered — do NOT repeat or pick a close variant; choose a clearly different angle/topic):"]
     for e in entries:
         lines.append(f"- [{e.get('date','')}] {e.get('type','')}: {e.get('topic','')} — {e.get('summary','')}")
     return "\n".join(lines)
@@ -498,22 +495,100 @@ def generate_planned_show(
 # =============================================================================
 
 
-def select_topic(topic_focus: str, segment_type: str, show_id: str | None = None) -> str:
-    """Pick a topic, avoiding recent ones from the show log."""
+def slugify_topic(topic: str) -> str:
+    """Return the topic slug format used in generated audio filenames."""
+    topic_slug = topic[:30].lower()
+    for char in ' -:,\'".?!()':
+        topic_slug = topic_slug.replace(char, "_")
+    return "_".join(filter(None, topic_slug.split("_")))
+
+
+def extract_topic_slug_from_filename(path: Path) -> str:
+    """Best-effort extraction of the topic slug from a generated segment filename."""
+    stem = path.stem
+    parts = stem.split("_")
+    if len(parts) < 4:
+        return ""
+    if len(parts[0]) == 2 and parts[0].isdigit():
+        parts = parts[1:]
+    if len(parts) < 4:
+        return ""
+    if parts[-2].isdigit() and parts[-1].isdigit():
+        parts = parts[:-2]
+
+    segment_types = sorted(SEGMENT_WORD_TARGETS, key=lambda s: len(s.split("_")), reverse=True)
+    for segment_type_name in segment_types:
+        prefix = segment_type_name.split("_")
+        if parts[: len(prefix)] == prefix:
+            return "_".join(parts[len(prefix):])
+    return ""
+
+
+def slot_topic_slugs(show_id: str, slot: str) -> set[str]:
+    """Return topic slugs already present in a slot's unaired audio files."""
+    slot_dir = OUTPUT_DIR / show_id / slot
+    if not slot_dir.exists():
+        return set()
+    return {
+        slug
+        for slug in (extract_topic_slug_from_filename(path) for path in slot_dir.glob("*.wav"))
+        if slug
+    }
+
+
+def _matches_avoid(topic: str, avoid_topics: list[str] | None) -> bool:
+    topic_key = topic.lower()
+    for avoid in avoid_topics or []:
+        avoid_key = str(avoid).strip().lower()
+        if not avoid_key:
+            continue
+        if topic_key == avoid_key or avoid_key in topic_key or topic_key in avoid_key:
+            return True
+    return False
+
+
+def select_topic(
+    topic_focus: str,
+    segment_type: str,
+    show_id: str | None = None,
+    avoid_topics: list[str] | None = None,
+    avoid_slugs: set[str] | None = None,
+) -> str:
+    """Pick a topic, avoiding recent, requested, and in-slot repeats."""
     pool = TOPIC_POOLS.get(topic_focus, [])
     if not pool:
         all_topics = []
         for topics in TOPIC_POOLS.values():
             all_topics.extend(topics)
         pool = all_topics
+    avoid_slugs = avoid_slugs or set()
 
-    # Avoid topics covered recently
+    def allowed(topic: str) -> bool:
+        return not _matches_avoid(topic, avoid_topics) and slugify_topic(topic) not in avoid_slugs
+
+    # Avoid topics covered recently. If the pool has been fully cycled,
+    # prefer the least-recently-used topic over a random rerun of a recent one.
     if show_id:
-        recent = read_show_log(show_id, n=20)
-        recent_topics = {e.get("topic", "").lower() for e in recent}
-        fresh = [t for t in pool if t.lower() not in recent_topics]
+        recent = read_show_log(show_id, n=40)
+        recent_order = [e.get("topic", "").lower() for e in recent]
+        recent_set = set(recent_order)
+        fresh = [t for t in pool if t.lower() not in recent_set and allowed(t)]
         if fresh:
             pool = fresh
+        else:
+            # Sort pool by how long ago each topic last aired (oldest first).
+            # read_show_log returns oldest→newest; higher index = more recent.
+            def most_recent_idx(t: str) -> int:
+                key = t.lower()
+                idx = -1
+                for i, rt in enumerate(recent_order):
+                    if rt == key:
+                        idx = i
+                return idx
+            lru_pool = [t for t in sorted(pool, key=most_recent_idx) if allowed(t)]
+            pool = lru_pool[: max(1, len(pool) // 3)] or [t for t in pool if allowed(t)] or pool
+    else:
+        pool = [t for t in pool if allowed(t)] or pool
 
     return random.choice(pool)
 
@@ -559,11 +634,11 @@ def build_generation_prompt(
     # Build context layers
     context_parts = []
 
-    # Show log — what this show has covered recently
-    if show_id:
-        show_log = format_show_log_for_prompt(show_id)
-        if show_log:
-            context_parts.append(show_log)
+    # Show log is intentionally NOT injected into the per-segment prompt:
+    # `select_topic` already filters recent topics out of the static pool,
+    # and listing recent topics in the LLM's context was acting as a
+    # suggestion-bank rather than an avoid-list (cross-batch anchoring).
+    # The episode planner still uses show_log where continuity matters.
 
     # Listener messages — real voices from the audience
     if segment_type in ("listener_mailbag", "show_intro", "deep_dive"):
@@ -670,7 +745,8 @@ def render_multi_voice(script: str, output_path: Path, voices: dict[str, str]) -
     log(f"  Rendering {len(parts)} dialogue segments...")
 
     # Use a temp directory for chunks so the streamer doesn't consume them
-    import tempfile, shutil
+    import shutil
+    import tempfile
     tmp_dir = Path(tempfile.mkdtemp(prefix="writ_dialogue_"))
 
     # Render each part
@@ -773,10 +849,7 @@ def generate_segment(
     slot_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    topic_slug = topic[:30].lower()
-    for char in ' -:,\'".?!()':
-        topic_slug = topic_slug.replace(char, '_')
-    topic_slug = '_'.join(filter(None, topic_slug.split('_')))
+    topic_slug = slugify_topic(topic)
 
     seq_prefix = f"{sequence:02d}_" if sequence is not None else ""
     output_path = slot_dir / f"{seq_prefix}{segment_type}_{topic_slug}_{timestamp}.wav"
@@ -861,12 +934,14 @@ def generate_for_show(
     show = schedule.shows[show_id]
     intent = intent or {}
     intent_context = format_prompt_context(intent, show_id=show_id)
+    intent_avoid = [str(item) for item in intent.get("avoid", [])]
 
     log(f"\n{'='*60}")
     log(f"Generating {count} segments for: {show.name} [slot {slot}]")
     log(f"{'='*60}")
 
     success = 0
+    batch_topics: list[str] = []
     for i in range(count):
         if segment_type:
             st = segment_type
@@ -875,9 +950,32 @@ def generate_for_show(
         else:
             st = random.choice(show.segment_types)
 
-        segment_topic = topic if topic is not None else intent.get("topic")
+        explicit_topic = topic if topic is not None else intent.get("topic")
+        if explicit_topic is not None:
+            segment_topic = str(explicit_topic)
+        else:
+            segment_topic = select_topic(
+                show.topic_focus,
+                st,
+                show_id=show_id,
+                avoid_topics=[*intent_avoid, *batch_topics],
+                avoid_slugs=slot_topic_slugs(show_id, slot),
+            )
 
         log(f"\n[{i+1}/{count}]")
+
+        # Inject just-generated batch topics as a hard avoid list so the LLM
+        # doesn't anchor on the previous segment's topic within the same slot.
+        batch_intent_context = intent_context
+        if batch_topics:
+            avoid_block = (
+                "JUST GENERATED IN THIS SAME BATCH (do NOT repeat, rephrase, "
+                "or pick a close sibling of these — pick a clearly different topic):\n"
+                + "\n".join(f"- {t}" for t in batch_topics)
+            )
+            batch_intent_context = (
+                f"{intent_context}\n\n{avoid_block}" if intent_context else avoid_block
+            )
 
         result = generate_segment(
             show_id=show_id,
@@ -889,10 +987,11 @@ def generate_for_show(
             voices=dict(show.voices),
             slot=slot,
             topic=segment_topic,
-            intent_context=intent_context,
+            intent_context=batch_intent_context,
         )
         if result:
             success += 1
+            batch_topics.append(segment_topic)
 
         if i < count - 1:
             time.sleep(2)
