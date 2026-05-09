@@ -73,7 +73,7 @@ def relevant_threads(show_id: str | None = None, limit: int = 5) -> list[dict[st
     return threads[:limit]
 
 
-def build_operator_brief(min_segments: int = 6) -> dict[str, Any]:
+def build_operator_brief(min_segments: int = 3) -> dict[str, Any]:
     ingest_messages()
     schedule = load_schedule(SCHEDULE_PATH)
     resolved = schedule.resolve()
@@ -88,7 +88,7 @@ def build_operator_brief(min_segments: int = 6) -> dict[str, Any]:
             "show_name": show.name,
             "slot": slot,
             "segments": count,
-            "status": "ok" if count >= min_segments else "low" if count >= 3 else "empty",
+            "status": "ok" if count >= min_segments else "low" if count > 0 else "empty",
         })
 
     return {

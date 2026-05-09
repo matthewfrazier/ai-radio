@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Generate AI music bumpers for WRIT-FM shows using music-gen.server.
+"""Generate AI music tracks for WRIT-FM shows using music-gen.server.
 
-Bumpers are 60-120 second instrumental tracks that play between talk segments.
+Music tracks are 2-4 minute AI-generated pieces that carry the station between
+short hosted talk breaks.
 Each show has curated music captions reflecting its vibe and topic focus.
 
 Usage:
@@ -282,6 +283,7 @@ for _show_id, _new_pool in _EXPANDED.items():
 # Duration range for bumpers (seconds)
 BUMPER_MIN = 120.0
 BUMPER_MAX = 240.0
+BUMPER_STOCK_MIN = 20
 
 
 def _display_name(caption: str) -> str:
@@ -307,7 +309,7 @@ def print_status():
     for show_id in SHOW_MUSIC:
         count = bumper_count(show_id)
         total += count
-        status = "OK" if count >= 5 else ("LOW" if count > 0 else "EMPTY")
+        status = "OK" if count >= BUMPER_STOCK_MIN else ("LOW" if count > 0 else "EMPTY")
         print(f"  {show_id:<25} {count:3d}  [{status}]")
     print(f"\n  Total: {total}")
 
@@ -388,7 +390,7 @@ def main():
     parser.add_argument("--all", action="store_true", help="Generate for all shows")
     parser.add_argument("--count", type=int, default=3, help="Bumpers to generate per show")
     parser.add_argument("--status", action="store_true", help="Show bumper counts and exit")
-    parser.add_argument("--min", type=int, default=5, help="Min bumpers threshold (used with --all)")
+    parser.add_argument("--min", type=int, default=BUMPER_STOCK_MIN, help="Min bumpers threshold (used with --all)")
     args = parser.parse_args()
 
     if args.status:

@@ -2,29 +2,29 @@
 """
 WRIT-FM Talk Segment Generator
 
-Generates long-form talk show content for the talk-first radio format.
+Generates hosted talk breaks for the music-forward radio format.
 Uses Claude CLI for scripts and Kokoro TTS for rendering.
 
 Segment types:
-  Long-form (primary content, 1500-3000 words):
-    deep_dive       - Extended single-topic exploration
+  Hosted breaks (primary spoken content, 450-1000 words):
+    deep_dive       - Compact single-topic exploration
     news_analysis   - Current events through late-night lens (uses RSS headlines)
-    interview       - Simulated interview with historical/fictional figure
-    panel           - Two hosts discuss topic from different angles
-    story           - Narrative storytelling, true stories from music/culture
+    interview       - Short simulated interview with historical/fictional figure
+    panel           - Two hosts discuss one topic from different angles
+    story           - Narrative storytelling from music/culture
     listener_mailbag - Invented listener letters + responses
-    music_essay     - Extended essay on artist/album/genre
+    music_essay     - Focused essay on artist/album/genre
 
   Short-form (transitions):
     station_id      - 15-30 word station identification
-    show_intro      - 80-150 word show opening
-    show_outro      - 60-120 word show closing
+    show_intro      - 40-80 word show opening
+    show_outro      - 35-70 word show closing
 
 Usage:
     uv run python talk_generator.py                                # Current show
-    uv run python talk_generator.py --show midnight_signal --count 5
+    uv run python talk_generator.py --show midnight_signal --count 2
     uv run python talk_generator.py --type deep_dive --topic "why vinyl matters"
-    uv run python talk_generator.py --all --count 3                # 3 per show
+    uv run python talk_generator.py --all --count 2                # 2 per show
 """
 
 from __future__ import annotations
@@ -64,26 +64,26 @@ from ledger import append_event, event_id  # noqa: E402
 # =============================================================================
 
 SEGMENT_WORD_TARGETS = {
-    # Long-form
-    "deep_dive": (1500, 2500),
-    "news_analysis": (1500, 2000),
-    "interview": (2000, 3000),
-    "panel": (2000, 3000),
-    "story": (1500, 2500),
-    "listener_mailbag": (1500, 2000),
-    "music_essay": (1500, 2500),
+    # Hosted talk breaks
+    "deep_dive": (550, 900),
+    "news_analysis": (500, 800),
+    "interview": (700, 1000),
+    "panel": (700, 1000),
+    "story": (500, 850),
+    "listener_mailbag": (450, 750),
+    "music_essay": (550, 900),
     # Short-form
     "station_id": (15, 30),
-    "show_intro": (80, 150),
-    "show_outro": (60, 120),
+    "show_intro": (40, 80),
+    "show_outro": (35, 70),
 }
 
 SEGMENT_PROMPTS = {
-    "deep_dive": """Write an extended exploration of this topic. Go deep.
-Build your central idea through stories, examples, tangents.
-Let one thought lead naturally to another. Circle back to earlier threads.
+    "deep_dive": """Write a focused exploration of this topic for a music-forward station.
+Build one central idea through 2-3 vivid examples or short tangents.
+Leave room for music to carry the feeling after the break.
 Include specific details: years, names, places when relevant.
-Structure: open with a hook, develop through 3-4 connected ideas, land somewhere unexpected.
+Structure: open with a hook, develop one connected thread, land somewhere memorable.
 Use [pause] for natural rhythm. Output ONLY the spoken words.""",
 
     "news_analysis": """Analyze these headlines through a late-night lens.
@@ -96,17 +96,17 @@ HEADLINES:
 
 Use [pause] for natural rhythm. Output ONLY the spoken words.""",
 
-    "interview": """Write a simulated interview where you (the host) talk with {guest_name}.
+    "interview": """Write a compact simulated interview where you (the host) talk with {guest_name}.
 Format with HOST: and GUEST: markers on separate lines.
 The guest is a fictional/composite character, not a real living person being impersonated.
 The conversation should feel natural - interruptions, tangents, moments of surprise.
-Build to genuine insight or revelation.
+Build quickly to one genuine insight or revelation, then get out.
 Use [pause] for natural rhythm. Output ONLY the spoken dialogue.""",
 
-    "panel": """Write a discussion between two hosts on this topic.
+    "panel": """Write a compact discussion between two hosts on this topic.
 Format with HOST_A: and HOST_B: markers on separate lines.
 They have different perspectives but mutual respect.
-The conversation should build - start with disagreement, find nuance, reach unexpected common ground.
+The conversation should build - start with disagreement, find nuance, reach common ground.
 Include moments of genuine surprise and humor.
 Use [pause] for natural rhythm. Output ONLY the spoken dialogue.""",
 
@@ -123,7 +123,7 @@ Respond to each with genuine warmth and thoughtfulness.
 Format: read the message, then respond. Natural transitions between letters.
 Use [pause] for natural rhythm. Output ONLY the spoken words.""",
 
-    "music_essay": """Write an extended essay about music.
+    "music_essay": """Write a focused essay about music.
 This is not a review. It's a love letter, an excavation, a meditation.
 Pick a specific angle: a single song, a studio, a year, a collaboration, a genre's birth.
 Use vivid, sensory language. Make the listener hear what you're describing.
@@ -134,12 +134,12 @@ Use [pause] for natural rhythm. Output ONLY the spoken words.""",
 Be cryptic but warm. Reference the frequency, the signal, the persistence of broadcasting.
 Output ONLY the spoken text. No quotes, headers, or explanations.""",
 
-    "show_intro": """Write an 80-150 word opening for the show.
+    "show_intro": """Write a 40-80 word opening for the show.
 Welcome listeners. Set the mood. Hint at what's ahead without being specific.
 Ground the listener in time and space - what hour is it, what kind of night.
 Output ONLY the spoken text.""",
 
-    "show_outro": """Write a 60-120 word show closing.
+    "show_outro": """Write a 35-70 word show closing.
 Thank the listener for staying. Acknowledge the time spent together.
 Hint at what's next on the station. Leave them with something to carry.
 Output ONLY the spoken text.""",
@@ -369,11 +369,11 @@ Available segment types (use EXACTLY these names with underscores): {', '.join(s
 
 {messages}
 
-Design a structured episode with 5-7 segments. The episode should have:
-1. A show_intro (short welcome, ground the listener in time and mood)
-2. 3-4 main segments with a THEMATIC THROUGHLINE connecting them
-3. If listener messages are available, weave a listener_mailbag segment in
-4. A show_outro (wrap the thread, tease what might come next time)
+Design a compact talk plan with 3-4 spoken breaks. The episode should have:
+1. A show_intro (very short welcome, ground the listener in time and mood)
+2. 1-2 main segments with a THEMATIC THROUGHLINE connecting them
+3. If listener messages are available, use one listener_mailbag as a main segment
+4. A show_outro (briefly wrap the thread, then hand the station back to music)
 
 Output ONLY a JSON array. Each element: {{"type": "segment_type", "topic": "specific topic", "note": "brief direction for this segment"}}
 
@@ -381,8 +381,6 @@ Example:
 [
   {{"type": "show_intro", "topic": "Welcome to The Night Garden", "note": "Ground in the late hour, hint at tonight's theme of sleep and surrender"}},
   {{"type": "deep_dive", "topic": "The architecture of lullabies", "note": "Main exploration — why these melodies work on the nervous system"}},
-  {{"type": "story", "topic": "The woman who sang her village to sleep", "note": "A narrative that deepens the theme"}},
-  {{"type": "listener_mailbag", "topic": "Messages from the frequency", "note": "Read and respond to listener messages about sleep and music"}},
   {{"type": "show_outro", "topic": "Signing off", "note": "Wrap the thread about surrender and rest"}}
 ]"""
 
@@ -433,7 +431,7 @@ def generate_planned_show(
 
     if not plan:
         log("  Plan generation failed, falling back to random segments")
-        return generate_for_show(show_id, schedule, slot=slot, count=4)
+        return generate_for_show(show_id, schedule, slot=slot, count=2)
 
     log(f"  Plan: {len(plan)} segments")
     for i, seg in enumerate(plan):
@@ -615,7 +613,7 @@ def build_generation_prompt(
     }
     base = build_host_prompt(host_id, show_context)
 
-    min_words, max_words = SEGMENT_WORD_TARGETS.get(segment_type, (1500, 2500))
+    min_words, max_words = SEGMENT_WORD_TARGETS.get(segment_type, (550, 900))
 
     prompt_template = SEGMENT_PROMPTS.get(segment_type, SEGMENT_PROMPTS["deep_dive"])
 
@@ -678,7 +676,7 @@ TARGET LENGTH: {min_words}-{max_words} words
 
 def run_generation(prompt: str, segment_type: str) -> str | None:
     """Run Claude CLI to generate the script."""
-    min_words, max_words = SEGMENT_WORD_TARGETS.get(segment_type, (1500, 2500))
+    min_words, max_words = SEGMENT_WORD_TARGETS.get(segment_type, (550, 900))
     timeout = 120 if max_words < 200 else 300
 
     script = run_claude(prompt, timeout=timeout)
@@ -805,7 +803,7 @@ def generate_segment(
     if topic is None:
         topic = select_topic(topic_focus, segment_type, show_id=show_id)
 
-    min_words, max_words = SEGMENT_WORD_TARGETS.get(segment_type, (1500, 2500))
+    min_words, max_words = SEGMENT_WORD_TARGETS.get(segment_type, (550, 900))
     log(f"=== Generating {segment_type} for {show_name} ===")
     log(f"  Topic: {topic[:80]}...")
     log(f"  Target: {min_words}-{max_words} words")
@@ -1010,8 +1008,8 @@ def slot_segment_count(show_id: str, slot: str) -> int:
 def stock_ahead(
     schedule: StationSchedule,
     airings_ahead: int = 4,
-    min_per_slot: int = 6,
-    count_per_generation: int = 3,
+    min_per_slot: int = 3,
+    count_per_generation: int = 2,
 ) -> dict[str, int]:
     """Walk the next N airings and top up any below threshold.
 
@@ -1071,8 +1069,8 @@ def main():
     parser.add_argument("--slot", help="Slot key YYYY-MM-DD_HHMM (default: next un-stocked airing of --show, or current airing)")
     parser.add_argument("--type", dest="segment_type", help="Specific segment type")
     parser.add_argument("--topic", help="Specific topic")
-    parser.add_argument("--count", type=int, default=3, help="Segments to generate (default: 3)")
-    parser.add_argument("--min", type=int, default=6, help="Minimum segments per slot (default: 6)")
+    parser.add_argument("--count", type=int, default=2, help="Segments to generate (default: 2)")
+    parser.add_argument("--min", type=int, default=3, help="Minimum segments per slot (default: 3)")
     parser.add_argument("--stock-ahead", type=int, default=0, metavar="N",
                         help="Walk next N airings and top up each to --min")
     parser.add_argument("--all", action="store_true", help="Alias for --stock-ahead 4")
@@ -1086,7 +1084,7 @@ def main():
 
     if args.list_types:
         print("\n=== Segment Types ===\n")
-        print("Long-form (primary content):")
+        print("Hosted talk breaks:")
         for st in ["deep_dive", "news_analysis", "interview", "panel", "story", "listener_mailbag", "music_essay"]:
             mn, mx = SEGMENT_WORD_TARGETS[st]
             print(f"  {st:20s} {mn}-{mx} words")
@@ -1130,7 +1128,7 @@ def main():
         for show_id, airing_start in airings:
             slot = slot_key(airing_start)
             c = by_slot.get(show_id, {}).get(slot, 0)
-            status = "OK" if c >= args.min else "LOW" if c >= 3 else "EMPTY"
+            status = "OK" if c >= args.min else "LOW" if c > 0 else "EMPTY"
             show_name = schedule.shows[show_id].name
             print(f"  {slot}  {show_name:28s} {c:3d} segments  [{status}]")
         return 0

@@ -116,7 +116,7 @@ class Show:
     segment_types: list[str] = field(default_factory=lambda: ["deep_dive"])
     bumper_style: str = "ambient"
     voices: dict[str, str] = field(default_factory=dict)
-    # Legacy fields (optional, unused in talk-first mode)
+    # Legacy fields (optional, unused in the current music-forward mode)
     segment_after_tracks: int = 1
     podcasts_enabled: bool = False
     music: dict[str, Any] = field(default_factory=dict)

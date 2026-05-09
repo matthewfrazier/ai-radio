@@ -1,7 +1,7 @@
 timezone: local
 
-# WRIT-FM Talk Show Schedule
-# Talk-first format: 10-20 minute segments with 1-2 minute music breaks.
+# WRIT-FM Show Schedule
+# Music-forward format: short hosted breaks inside longer AI music blocks.
 
 shows:
   midnight_signal:

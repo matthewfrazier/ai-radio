@@ -279,22 +279,22 @@ cmd_generate() {
     local type="${1:-}"; shift 2>/dev/null || true
     case "$type" in
         talk)
-            log "Generating talk segments..."
+            log "Generating hosted talk breaks..."
             cd "$PROJECT_ROOT"
-            exec uv run python mac/content_generator/talk_generator.py ${@:---all --count 3} ;;
+            exec uv run python mac/content_generator/talk_generator.py ${@:---all --count 2 --min 3} ;;
         music|bumper|bumpers)
             is_healthy music-gen || warn "music-gen.server not running"
             cd "$PROJECT_ROOT"
-            exec uv run python mac/content_generator/music_bumper_generator.py ${@:---all --min 10} ;;
+            exec uv run python mac/content_generator/music_bumper_generator.py ${@:---all --min 20} ;;
         status)
             cd "$PROJECT_ROOT"
             uv run python mac/content_generator/talk_generator.py --status 2>/dev/null
             uv run python mac/content_generator/music_bumper_generator.py --status 2>/dev/null ;;
         *)
             echo "Usage: writ generate <talk|music|status> [args...]"
-            echo "  writ generate talk                          # 3 per show"
+            echo "  writ generate talk                          # 2 per upcoming slot"
             echo "  writ generate talk --show midnight_signal   # specific show"
-            echo "  writ generate music                         # stock bumpers"
+            echo "  writ generate music                         # stock music tracks"
             echo "  writ generate status                        # show counts"
             exit 1 ;;
     esac

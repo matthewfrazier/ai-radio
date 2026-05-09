@@ -27,6 +27,21 @@ BUMPER_DIR = PROJECT_ROOT / "output" / "music_bumpers"
 NOW_PLAYING_DEFAULT = PROJECT_ROOT / "output" / "now_playing.json"
 CURRENT_TRACK_FILE = PROJECT_ROOT / "output" / ".current_track.txt"
 
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.environ.get(name, str(default))))
+    except ValueError:
+        return default
+
+
+# Music-forward defaults: keep talk as occasional hosted breaks inside longer
+# music runs. Env vars make live tuning possible without another deploy.
+TALK_SEGMENTS_PER_PLAYLIST = _env_int("WRIT_TALK_SEGMENTS_PER_PLAYLIST", 3)
+MUSIC_ONLY_TRACK_LIMIT = _env_int("WRIT_MUSIC_ONLY_TRACK_LIMIT", 12)
+MUSIC_LEAD_IN_BUMPERS_RANGE = (2, 3)
+MUSIC_BUMPERS_AFTER_TALK_RANGE = (3, 4)
+
 sys.path.insert(0, str(Path(__file__).parent))
 from schedule import load_schedule, slot_key, parse_slot_key  # noqa: E402
 SCHEDULE_PATH = PROJECT_ROOT / "config" / "schedule.yaml"
@@ -220,6 +235,29 @@ def describe_track(filepath: Path) -> tuple[str, str]:
     return clean_name(filepath), "unknown"
 
 
+def make_bumper_entry(filepath: Path) -> dict:
+    meta_path = filepath.with_suffix(".json")
+    name = "AI Music"
+    if meta_path.exists():
+        try:
+            m = json.loads(meta_path.read_text())
+            name = m.get("display_name", name)
+        except Exception:
+            pass
+    return {"path": str(filepath), "type": "bumper", "name": name}
+
+
+def append_bumpers(entries: list[dict], bumpers: list[Path], start_idx: int, count: int) -> int:
+    """Append up to count bumpers from start_idx and return the next index."""
+    bumper_idx = start_idx
+    for _ in range(count):
+        if bumper_idx >= len(bumpers):
+            break
+        entries.append(make_bumper_entry(bumpers[bumper_idx]))
+        bumper_idx += 1
+    return bumper_idx
+
+
 def record_play(filepath: str, show_id: str):
     """Record a play to history. Called when stream_metadata advances .current_track.txt."""
     if not HISTORY_ENABLED:
@@ -260,35 +298,32 @@ def build_playlist(show_id: str, slot: str) -> list[dict]:
     bumpers = get_bumpers(show_id)
     bumper_idx = 0
 
+    if TALK_SEGMENTS_PER_PLAYLIST:
+        talks = talks[:TALK_SEGMENTS_PER_PLAYLIST]
+    else:
+        talks = []
+
     if not talks and not bumpers:
         # Nothing — use silence
         entries.append({"path": str(SILENCE_FILE), "type": "silence", "name": "Silence"})
         return entries
 
     if not talks:
-        # No talk, play bumpers as filler (up to 3)
-        for b in bumpers[:3]:
-            entries.append({"path": str(b), "type": "bumper", "name": "AI Music"})
+        # No talk, stay music-forward and keep silence only as the playlist tail.
+        for b in bumpers[:MUSIC_ONLY_TRACK_LIMIT]:
+            entries.append(make_bumper_entry(b))
         entries.append({"path": str(SILENCE_FILE), "type": "silence", "name": "Silence"})
         return entries
 
-    # Interleave: talk, 1-2 bumpers, talk, 1-2 bumpers, ...
+    # Music-forward flow: lead with music, then use talk as hosted breaks between
+    # larger music blocks.
+    lead_in = random.randint(*MUSIC_LEAD_IN_BUMPERS_RANGE)
+    bumper_idx = append_bumpers(entries, bumpers, bumper_idx, lead_in)
+
     for talk in talks:
         entries.append({"path": str(talk), "type": "talk", "name": clean_name(talk)})
-        n_bumpers = random.randint(1, 2)
-        for _ in range(n_bumpers):
-            if bumper_idx < len(bumpers):
-                b = bumpers[bumper_idx]
-                meta_path = b.with_suffix(".json")
-                bname = "AI Music"
-                if meta_path.exists():
-                    try:
-                        m = json.loads(meta_path.read_text())
-                        bname = m.get("display_name", bname)
-                    except Exception:
-                        pass
-                entries.append({"path": str(b), "type": "bumper", "name": bname})
-                bumper_idx += 1
+        n_bumpers = random.randint(*MUSIC_BUMPERS_AFTER_TALK_RANGE)
+        bumper_idx = append_bumpers(entries, bumpers, bumper_idx, n_bumpers)
 
     return entries
 
@@ -377,9 +412,7 @@ def run():
                 startup_sweep_done = True
 
             playlist_entries = build_playlist(current_show_id, current_slot)
-            last_talk_set = {
-                Path(e["path"]).name for e in playlist_entries if e["type"] == "talk"
-            }
+            last_talk_set = {p.name for p in get_talk_segments(current_show_id, current_slot)}
             write_playlist(playlist_entries)
             signal_ezstream_reload()
             log(f"  Playlist: {len(playlist_entries)} tracks")
@@ -466,9 +499,7 @@ def run():
             if new_files:
                 log(f"  New content in slot ({len(new_files)} file(s)), rebuilding playlist")
                 playlist_entries = build_playlist(current_show_id, current_slot)
-                last_talk_set = {
-                    Path(e["path"]).name for e in playlist_entries if e["type"] == "talk"
-                }
+                last_talk_set = {p.name for p in get_talk_segments(current_show_id, current_slot)}
                 write_playlist(playlist_entries)
                 signal_ezstream_reload()
 
