@@ -23,9 +23,10 @@ whole slot folder is archived to `$WRIT_ARCHIVE_DIR/{show_id}/{slot}/` and never
 plays again. As each track finishes, it's moved to `{slot}/aired/` so a crash
 mid-slot doesn't replay what already aired.
 
-Bumpers (`$WRIT_BUMPER_DIR/{show_id}/`) are a **shared pool** — not
-slot-scoped. The playlist should feel like music with occasional hosted breaks,
-not a talk show with musical padding.
+Bumpers (`$WRIT_BUMPER_DIR/{show_id}/`) are a **station-local pool**, not
+slot-scoped and never shared between KLOD-FM and CDEX-FM. The playlist should
+feel like music with occasional hosted breaks, not a talk show with musical
+padding.
 
 Your job is to make sure upcoming slots have enough content BEFORE they begin.
 You do NOT manage playback, scheduling, archiving, or aired-marking — that's
@@ -116,7 +117,7 @@ cd mac/content_generator && uv run python talk_generator.py --plan --show midnig
 # uv run python talk_generator.py --plan --show midnight_signal --slot 2026-04-21_0000
 ```
 
-Priority order: shared music pool → current slot if empty → next airing → the airing after, and so on.
+Priority order: station-local music pool → current slot if empty → next airing → the airing after, and so on.
 
 ### 3. Stock Music Bumpers
 Only if music-gen.server is running at localhost:4009.

@@ -39,6 +39,7 @@ TALK_DIR = STATION.talk_dir
 BUMPER_DIR = STATION.bumper_dir
 NOW_PLAYING_DEFAULT = STATION.now_playing_file
 CURRENT_TRACK_FILE = STATION.current_track_file
+AUDIO_SUFFIXES = {".flac", ".mp3", ".wav"}
 
 
 def _env_int(name: str, default: int) -> int:
@@ -82,6 +83,58 @@ def log(msg: str):
     print(f"[{ts}] {msg}", flush=True)
 
 
+def _path_is_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _content_metadata(path: Path) -> dict:
+    meta_path = path.with_suffix(".json")
+    if not meta_path.exists():
+        return {}
+    try:
+        data = json.loads(meta_path.read_text())
+    except Exception as e:
+        log(f"  Ignoring unreadable metadata for {path.name}: {e}")
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _metadata_station_id(metadata: dict) -> str | None:
+    station_id = metadata.get("station_id")
+    return str(station_id) if station_id else None
+
+
+def _metadata_show_id(metadata: dict) -> str | None:
+    show_id = metadata.get("show_id")
+    return str(show_id) if show_id else None
+
+
+def _is_current_station_content(path: Path, expected_show_id: str | None = None) -> bool:
+    if not _path_is_under(path, STATION.output_dir):
+        log(f"  Skipping content outside {STATION.id}: {path}")
+        return False
+
+    metadata = _content_metadata(path)
+    metadata_station = _metadata_station_id(metadata)
+    if metadata_station and metadata_station != STATION.id:
+        log(f"  Skipping {metadata_station} content on {STATION.id}: {path.name}")
+        return False
+
+    metadata_show = _metadata_show_id(metadata)
+    if expected_show_id and metadata_show and metadata_show != expected_show_id:
+        log(f"  Skipping {metadata_show} content in {expected_show_id}: {path.name}")
+        return False
+    if expected_show_id and not metadata_show and not path.name.startswith(f"{expected_show_id}_"):
+        log(f"  Skipping unowned content in {expected_show_id}: {path.name}")
+        return False
+
+    return True
+
+
 def sighup_handler(signum, frame):
     """Ignore SIGHUP — we send it to ezstream and don't want to die from it."""
     pass
@@ -113,7 +166,10 @@ def get_talk_segments(show_id: str, slot: str) -> list[Path]:
     slot_dir = TALK_DIR / show_id / slot
     if not slot_dir.exists():
         return []
-    segments = sorted(slot_dir.glob("*.wav"), key=lambda p: p.name)
+    segments = sorted(
+        (p for p in slot_dir.glob("*.wav") if _is_current_station_content(p)),
+        key=lambda p: p.name,
+    )
 
     # If any files have sequence prefixes (00_, 01_, ...), respect the order
     has_sequence = any(s.name[:3].rstrip("_").isdigit() for s in segments)
@@ -175,7 +231,9 @@ def get_bumpers(show_id: str) -> list[Path]:
         return []
     files = [
         f for f in show_dir.iterdir()
-        if f.is_file() and f.suffix.lower() in {".flac", ".mp3", ".wav"}
+        if f.is_file()
+        and f.suffix.lower() in AUDIO_SUFFIXES
+        and _is_current_station_content(f, show_id)
     ]
     if HISTORY_ENABLED and files:
         try:
@@ -320,7 +378,7 @@ def build_playlist(show_id: str, slot: str) -> list[dict]:
 
     Reads only files directly in {TALK_DIR}/{show_id}/{slot}/ — the aired/
     subfolder is ignored, so restart mid-slot doesn't replay what already aired.
-    Bumpers remain a shared pool under music_bumpers/{show_id}/.
+    Bumpers remain a station-local pool under music_bumpers/{show_id}/.
     """
     entries = []
     talks = get_talk_segments(show_id, slot)

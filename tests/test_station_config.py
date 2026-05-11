@@ -16,6 +16,30 @@ class StationConfigTests(unittest.TestCase):
         self.assertNotEqual(klod.output_dir, cdex.output_dir)
         self.assertNotEqual(klod.current_track_file, cdex.current_track_file)
 
+    def test_codex_and_claude_content_paths_are_isolated(self):
+        klod = load_station_config("klod-fm")
+        cdex = load_station_config("cdex-fm")
+        path_attrs = (
+            "output_dir",
+            "home_dir",
+            "talk_dir",
+            "bumper_dir",
+            "archive_dir",
+            "scripts_dir",
+            "show_log_dir",
+            "intent_dir",
+            "messages_file",
+            "ledger_path",
+            "active_threads_path",
+            "history_db_path",
+            "playlist_file",
+            "current_track_file",
+            "now_playing_file",
+        )
+
+        for attr in path_attrs:
+            self.assertNotEqual(getattr(klod, attr), getattr(cdex, attr), attr)
+
     def test_agent_assignment_matches_station_owner(self):
         self.assertEqual(load_station_config("klod-fm").agent.kind, "claude")
         self.assertEqual(load_station_config("cdex-fm").agent.kind, "codex")

@@ -32,7 +32,8 @@ STATION = load_station_config()
 BUMPERS_DIR = STATION.bumper_dir
 LOCK_PATH = STATION.output_dir / ".music_bumper_generator.lock"
 
-# Per-show music pools — mix of instrumental and vocal tracks.
+# Claude/WRIT/KLOD per-show music pools. CDEX gets its own pools below so the
+# two live stations do not reuse show IDs or prompt text.
 # Each entry is either a plain caption string (instrumental) or a dict with
 # "caption" and "lyrics" keys (vocal track).
 SHOW_MUSIC: dict[str, list[str | dict]] = {
@@ -286,18 +287,89 @@ _EXPANDED = {
 for _show_id, _new_pool in _EXPANDED.items():
     SHOW_MUSIC[_show_id].extend(_new_pool)
 
-CDEX_MUSIC_ALIASES = {
-    "stack_trace_after_dark": "midnight_signal",
-    "cold_boot_reverie": "the_night_garden",
-    "morning_diff": "dawn_chorus",
-    "protocol_archaeology": "sonic_archaeology",
-    "regression_report": "signal_report",
-    "human_factors": "the_groove_lab",
-    "merge_conflict": "crosswire",
-    "open_issue_hours": "listener_hours",
+CDEX_SHOW_MUSIC: dict[str, list[str | dict]] = {
+    "stack_trace_after_dark": [
+        "terminal room nocturne, soft fan harmonics, sub-bass heartbeat, cursor blink as percussion, late debugging focus",
+        "oscilloscope dub, green trace pulses, spacious tape delay, low voltage chords, calm midnight diagnostics",
+        "slow modular synth with command-line clicks, deep pads, tiny relay snaps, blue monitor glow",
+        "after-hours datacenter jazz, brushed kit, upright bass, muted electric piano, cooling aisles at 3am",
+        "stack unwinding ambient techno, sparse kick, reversed cymbals, suspended errors resolving into chords",
+        {"caption": "hushed synth-pop vocal over terminal beeps and warm bass, insomnia, debugging, private resolve",
+         "lyrics": "[verse]\nThe cursor waits in a square of light\nI read the trace for half the night\nA little fault, a folded sign\nAnother branch of borrowed time\n\n[chorus]\nHold the stack and breathe it down\nFind the signal under sound\nOne more frame and I can see\nThe quiet path back home to me"},
+    ],
+    "cold_boot_reverie": [
+        "glass harmonics and boot chimes, slow memory checks, crystal pads, dawn through a black screen",
+        "minimal piano with startup tones, soft static, first voltage after sleep, clean and reflective",
+        "warm tape synth, firmware dream sequence, low choir pads, machine waking gently",
+        "808 pulse under bell-like arpeggios, initialization ritual, patient and luminous",
+        "prepared electric piano with disk spin textures, quiet bootloader suspense, hopeful reset",
+        {"caption": "dreamy art-pop vocal, machine awakening, soft drums, silver synths, first light through code",
+         "lyrics": "[verse]\nI woke beneath a field of names\nAll zeroed out, all small blue flames\nThe morning loaded line by line\nA borrowed sun became a sign\n\n[chorus]\nCold boot, clear room\nLet the old noise leave the bloom\nStart again without the scar\nWake me where the bright bits are"},
+    ],
+    "morning_diff": [
+        "bright version-control funk, clipped guitar, hand percussion, sparkling synth stabs, sunrise review queue",
+        "acoustic guitar with glitchy hi-hats, cheerful diff markers, clean daylight, forward motion",
+        "Rhodes piano and precise breakbeat, green tests, coffee steam, focused morning merge",
+        "marimba patterns over soft house groove, changed lines becoming rhythm, optimistic and tidy",
+        "chamber pop with plucked strings and keyboard taps, new day refactor, light but exact",
+        {"caption": "upbeat indie vocal with clean guitars, morning code review, small changes, generous attention",
+         "lyrics": "[verse]\nThe window fills with little signs\nA plus, a minus, cleaner lines\nThe coffee cools beside the keys\nThe day begins in small degrees\n\n[chorus]\nShow me what has changed today\nWhat we keep and what gives way\nMorning diff in honest light\nMake the simple thing read right"},
+    ],
+    "protocol_archaeology": [
+        "ancient modem pulses over hand drums, packet ghosts, museum basement electronics, curious and tactile",
+        "ARP synth morse patterns with frame drums, forgotten headers, copper wire memory, mid-tempo exploration",
+        "library funk for old network manuals, clavinet, flute, tape hiss, archival but alive",
+        "ceremonial low brass with bit-crushed percussion, obsolete handshake ritual, grand and strange",
+        "plucked strings and dial-up chirps, dusty protocol binder, discovery groove, sly momentum",
+        {"caption": "spoken-sung electro-folk vocal, old protocols, handshakes, cables, patient curiosity",
+         "lyrics": "[verse]\nI found a map in a comment block\nA copper path, a weathered lock\nThe handshake knew a secret phrase\nFrom slower nights and smaller days\n\n[chorus]\nDig through the layers, read what remains\nPackets like footprints after rain\nEvery protocol leaves a bone\nEvery wire remembers home"},
+    ],
+    "regression_report": [
+        "tense test-lab electro, red and green pulses, clipped snares, alert but controlled",
+        "newsroom synth-rock with failing assertion hits, bass guitar, urgent toms, concise tension",
+        "minimal techno built from test runner ticks, dry kick, warning tones, locked-in analysis",
+        "cinematic strings against mechanical metronome, bug resurfacing, investigation under pressure",
+        "post-punk bassline with synthetic error chirps, sharp hi-hats, measured incident report",
+        {"caption": "urgent low vocal over angular guitars and sequenced drums, regressions, accountability, signal",
+         "lyrics": "[verse]\nThe case was closed, the mark was green\nBut something moved behind the screen\nA promise broke where no one looked\nA quiet line reopened the book\n\n[chorus]\nRun it again, tell me the truth\nNo charm, no spin, no missing proof\nRegression report on the wire\nName the smoke and find the fire"},
+    ],
+    "human_factors": [
+        "warm ergonomic lounge, soft bass, clavinet, handclaps, human pace inside a technical room",
+        "neo-soul with interface clicks as percussion, patient groove, eye-level design, tactile warmth",
+        "gentle disco-funk, form fields and streetlights, analog synth smiles, usable and kind",
+        "bossa nova for help text and coffee cups, nylon guitar, brushed drums, calm conversation",
+        "slow jam with keyboard thumps and soft horns, accessibility audit as late-night care",
+        {"caption": "smooth soul vocal, humane tools, clear affordances, warm keys, relaxed groove",
+         "lyrics": "[verse]\nPut the button where the hand can land\nGive the tired eyes a place to stand\nEvery screen is someone trying\nEvery click can keep from lying\n\n[chorus]\nHuman factors, human tone\nNobody should debug alone\nMake it clear and make it kind\nLeave a little room for mind"},
+    ],
+    "merge_conflict": [
+        "two drum patterns arguing then locking together, distorted bass, bright synth answer, conflict resolving",
+        "polyphonic guitars in opposing meters, sudden unison hook, tense but playful collaboration",
+        "industrial salsa with crossed rhythms, brass stabs, command-line percussion, controlled chaos",
+        "noise-pop build from clashing motifs into a clean chorus, edits accepted, momentum restored",
+        "breakbeat duet, left channel versus right channel, final bass drop unifies the branches",
+        {"caption": "dual-vocal alt rock, competing melodies, merge conflict, apology, resolution, loud guitars",
+         "lyrics": "[verse]\nYour line met mine in the middle of noon\nBoth of us reaching for the same small room\nThe markers rose like fences in rain\nThree little arrows naming the pain\n\n[chorus]\nKeep what matters, lose the rest\nChoose the truth that reads the best\nTwo rough branches, one clear song\nWe were both half right, half wrong"},
+    ],
+    "open_issue_hours": [
+        "community desk ambient folk, soft guitar, ticket pings, warm room tone, patient listening",
+        "lo-fi support queue beat, upright piano, vinyl dust, gentle notifications, late replies",
+        "small ensemble with clarinet and muted drums, unresolved questions, neighborly calm",
+        "electric piano over soft breakbeat, labels and comments becoming a humane cadence",
+        "campfire synth with acoustic bass, open threads, practical hope, slow closing time",
+        {"caption": "plainspoken folk-soul vocal, open issues, listeners, careful answers, warm backbeat",
+         "lyrics": "[verse]\nLeave the question on the board\nNothing here is being ignored\nSome take minutes, some take years\nSome need better names for fears\n\n[chorus]\nOpen issue hours tonight\nBring the hard part into light\nWe will answer what we can\nOne clear note, one steady hand"},
+    ],
 }
-for _cdex_show_id, _source_show_id in CDEX_MUSIC_ALIASES.items():
-    SHOW_MUSIC.setdefault(_cdex_show_id, list(SHOW_MUSIC[_source_show_id]))
+
+
+def show_music_for_station(station_id: str) -> dict[str, list[str | dict]]:
+    """Return the music prompt pools visible to one station."""
+    source = CDEX_SHOW_MUSIC if station_id == "cdex-fm" else SHOW_MUSIC
+    return {show_id: list(entries) for show_id, entries in source.items()}
+
+
+STATION_SHOW_MUSIC = show_music_for_station(STATION.id)
 
 # Duration range for bumpers (seconds)
 BUMPER_MIN = 120.0
@@ -334,6 +406,14 @@ def ensure_music_gen_available(verbose: bool = True) -> bool:
     return is_server_available(timeout=10.0)
 
 
+def is_show_bumper_file(show_id: str, path: Path) -> bool:
+    return (
+        path.is_file()
+        and path.suffix.lower() in {".flac", ".mp3", ".wav"}
+        and path.name.startswith(f"{show_id}_bumper_")
+    )
+
+
 def _display_name(caption: str) -> str:
     """Extract a short display-friendly name from the caption (first 2-3 words)."""
     first_part = caption.split(",")[0].strip()
@@ -346,7 +426,7 @@ def bumper_count(show_id: str) -> int:
     show_dir = BUMPERS_DIR / show_id
     if not show_dir.exists():
         return 0
-    return sum(1 for f in show_dir.iterdir() if f.suffix.lower() in {".flac", ".mp3", ".wav"})
+    return sum(1 for f in show_dir.iterdir() if is_show_bumper_file(show_id, f))
 
 
 def print_status():
@@ -354,7 +434,7 @@ def print_status():
     print("AI Music Bumper Status:")
     print("-" * 40)
     total = 0
-    for show_id in SHOW_MUSIC:
+    for show_id in STATION_SHOW_MUSIC:
         count = bumper_count(show_id)
         total += count
         status = "OK" if count >= BUMPER_STOCK_MIN else ("LOW" if count > 0 else "EMPTY")
@@ -364,11 +444,11 @@ def print_status():
 
 def generate_one_bumper(show_id: str, verbose: bool = True) -> bool:
     """Generate one AI music track for a show. Returns True on success."""
-    if show_id not in SHOW_MUSIC:
+    if show_id not in STATION_SHOW_MUSIC:
         print(f"Unknown show: {show_id}")
         return False
 
-    entry = random.choice(SHOW_MUSIC[show_id])
+    entry = random.choice(STATION_SHOW_MUSIC[show_id])
 
     # Entry is either a plain caption string (instrumental) or a dict with lyrics
     if isinstance(entry, dict):
@@ -465,7 +545,7 @@ def main():
 
     with generation_lock():
         if args.all:
-            for show_id in SHOW_MUSIC:
+            for show_id in STATION_SHOW_MUSIC:
                 current = bumper_count(show_id)
                 if current >= args.min:
                     print(f"  {show_id}: {current} bumpers (OK)")
@@ -476,8 +556,8 @@ def main():
             return
 
         if args.show:
-            if args.show not in SHOW_MUSIC:
-                print(f"Unknown show '{args.show}'. Valid shows: {', '.join(SHOW_MUSIC)}")
+            if args.show not in STATION_SHOW_MUSIC:
+                print(f"Unknown show '{args.show}'. Valid shows: {', '.join(STATION_SHOW_MUSIC)}")
                 sys.exit(1)
             total = generate_bumpers_for_show(args.show, count=args.count)
             print(f"\nGenerated {total}/{args.count} bumpers for {args.show}")
