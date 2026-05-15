@@ -363,9 +363,17 @@ CDEX_SHOW_MUSIC: dict[str, list[str | dict]] = {
 }
 
 
+from klod_music_pool import KLOD_SHOW_MUSIC  # noqa: E402
+
+
 def show_music_for_station(station_id: str) -> dict[str, list[str | dict]]:
     """Return the music prompt pools visible to one station."""
-    source = CDEX_SHOW_MUSIC if station_id == "cdex-fm" else SHOW_MUSIC
+    if station_id == "cdex-fm":
+        source = CDEX_SHOW_MUSIC
+    elif station_id == "klod-fm":
+        source = KLOD_SHOW_MUSIC
+    else:
+        source = SHOW_MUSIC
     return {show_id: list(entries) for show_id, entries in source.items()}
 
 
