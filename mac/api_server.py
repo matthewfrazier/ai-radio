@@ -7,6 +7,7 @@ Runs as a daemon thread inside the streamer process.
 """
 
 import http.server
+import hashlib
 import json
 import os
 import socketserver
@@ -42,6 +43,12 @@ try:
 except ImportError:
     QR_ENABLED = False
 
+try:
+    from content_generator.ledger import add_listener_reaction
+    REACTION_LEDGER_ENABLED = True
+except ImportError:
+    REACTION_LEDGER_ENABLED = False
+
 # Discogs lookup cache to avoid repeated lookups for the same track
 _DISCOGS_CACHE_MAX = 500
 _discogs_cache: dict[str, dict | None] = {}
@@ -54,8 +61,19 @@ LEDGER_PATH = STATION.ledger_path
 
 # Rate limiting for messages
 MESSAGE_COOLDOWN = 300  # 5 minutes between messages per IP
+REACTION_COOLDOWN = 2  # Keep one-tap feedback responsive without allowing spam.
 last_message_times: dict[str, float] = {}
+last_reaction_times: dict[str, float] = {}
 _messages_lock = threading.Lock()
+_reactions_lock = threading.Lock()
+
+REACTION_LABELS = {
+    "more_like_this": "more like this",
+    "too_weird": "too weird",
+    "great_voice": "great voice",
+    "save_this": "save this",
+    "play_later": "play later",
+}
 
 PORT = int(os.environ.get("WRIT_NOW_PLAYING_PORT", str(STATION.stream.api_port)))
 ICECAST_STATUS_URL = os.environ.get(
@@ -70,6 +88,7 @@ STATION_PROXY_ENDPOINTS = {
     "history",
     "messages",
     "message",
+    "reaction",
     "diary",
     "discogs",
     "qr",
@@ -100,6 +119,12 @@ class NowPlayingHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(data).encode())
         except BrokenPipeError:
             pass
+
+    def _client_ip(self) -> str:
+        forwarded = self.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            return forwarded.split(",", 1)[0].strip() or self.client_address[0]
+        return self.client_address[0]
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -194,6 +219,8 @@ class NowPlayingHandler(http.server.BaseHTTPRequestHandler):
                 return
             if method == "POST" and path == "/message":
                 return self._handle_message_body(body or b"")
+            if method == "POST" and path == "/reaction":
+                return self._handle_reaction_body(body or b"")
             return self._send_error(404, "Unknown endpoint")
 
         target = f"http://127.0.0.1:{station.stream.api_port}{path}"
@@ -203,6 +230,11 @@ class NowPlayingHandler(http.server.BaseHTTPRequestHandler):
         headers = {}
         if content_type:
             headers["Content-Type"] = content_type
+        forwarded_for = self.headers.get("X-Forwarded-For", "").strip()
+        if forwarded_for:
+            headers["X-Forwarded-For"] = f"{forwarded_for}, {self.client_address[0]}"
+        else:
+            headers["X-Forwarded-For"] = self.client_address[0]
 
         try:
             request = urllib.request.Request(
@@ -253,7 +285,7 @@ class NowPlayingHandler(http.server.BaseHTTPRequestHandler):
         station_route = parse_station_route(path)
         if station_route:
             station_id, station_path = station_route
-            if station_path != "/message":
+            if station_path not in ("/message", "/reaction"):
                 self.send_response(404)
                 self.end_headers()
                 return
@@ -268,16 +300,20 @@ class NowPlayingHandler(http.server.BaseHTTPRequestHandler):
                 content_type=self.headers.get("Content-Type"),
             )
 
-        if path != "/message":
-            self.send_response(404)
-            self.end_headers()
+        if path == "/message":
+            content_length = int(self.headers.get('Content-Length', 0))
+            self._handle_message_body(self.rfile.read(content_length))
+            return
+        if path == "/reaction":
+            content_length = int(self.headers.get('Content-Length', 0))
+            self._handle_reaction_body(self.rfile.read(content_length))
             return
 
-        content_length = int(self.headers.get('Content-Length', 0))
-        self._handle_message_body(self.rfile.read(content_length))
+        self.send_response(404)
+        self.end_headers()
 
     def _handle_message_body(self, body: bytes):
-        client_ip = self.client_address[0]
+        client_ip = self._client_ip()
         now = time.time()
         if client_ip in last_message_times and now - last_message_times[client_ip] < MESSAGE_COOLDOWN:
             wait_time = int(MESSAGE_COOLDOWN - (now - last_message_times[client_ip]))
@@ -294,6 +330,52 @@ class NowPlayingHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"status": "received"})
         except Exception:
             self._send_error(500, "Internal server error")
+
+    def _handle_reaction_body(self, body: bytes):
+        if not REACTION_LEDGER_ENABLED:
+            return self._send_error(503, "Reaction ledger unavailable")
+
+        client_ip = self._client_ip()
+        now = time.time()
+        with _reactions_lock:
+            if client_ip in last_reaction_times and now - last_reaction_times[client_ip] < REACTION_COOLDOWN:
+                wait_time = max(1, int(REACTION_COOLDOWN - (now - last_reaction_times[client_ip])))
+                return self._send_error(429, f"Please wait {wait_time}s")
+
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except Exception:
+            return self._send_error(400, "Invalid JSON")
+
+        reaction = normalize_reaction(data.get("reaction"))
+        if not reaction:
+            return self._send_error(400, "Invalid reaction")
+
+        now_playing = get_now_playing()
+        if not now_playing.get("track"):
+            return self._send_error(409, "No current track")
+
+        ip_hash = hashlib.sha256(f"{STATION.id}:{client_ip}".encode("utf-8")).hexdigest()[:16]
+        try:
+            recorded = add_listener_reaction(
+                reaction,
+                REACTION_LABELS[reaction],
+                now_playing,
+                ip_hash,
+            )
+        except Exception:
+            return self._send_error(500, "Internal server error")
+
+        with _reactions_lock:
+            last_reaction_times[client_ip] = time.time()
+
+        self._send_json({
+            "status": "received",
+            "reaction": reaction,
+            "label": REACTION_LABELS[reaction],
+            "recorded": bool(recorded),
+            "track": now_playing.get("track"),
+        })
 
     def do_OPTIONS(self):
         self.send_response(200)
@@ -325,6 +407,14 @@ def parse_station_route(path: str) -> tuple[str, str] | None:
         return None
 
     return station_id, "/" + "/".join(endpoint_parts)
+
+
+def normalize_reaction(value: object) -> str | None:
+    """Normalize a public reaction token to a known ledger slug."""
+    if not isinstance(value, str):
+        return None
+    reaction = value.strip().lower().replace("-", "_").replace(" ", "_")
+    return reaction if reaction in REACTION_LABELS else None
 
 
 def check_process(name: str) -> bool:

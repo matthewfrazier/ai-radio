@@ -169,6 +169,60 @@ def add_decision(summary: str, mode: str = "maintenance", show_id: str | None = 
     })
 
 
+def add_listener_reaction(
+    reaction: str,
+    reaction_label: str,
+    track_info: dict[str, Any],
+    ip_hash: str,
+    source: str = "web",
+) -> bool:
+    """Append a one-tap listener reaction for operator-facing memory."""
+    now = utcish_now()
+    track = str(track_info.get("track") or "").strip()
+    show_id = str(track_info.get("show_id") or "").strip()
+    tags = ["listener_reaction", reaction]
+    if show_id:
+        tags.append(show_id)
+
+    operator_notes = {
+        "more_like_this": "Listener wants adjacent tone, topic, or music in this lane.",
+        "too_weird": "Listener found this too strange; soften similar future choices if this repeats.",
+        "great_voice": "Listener liked the host or voice delivery.",
+        "save_this": "Candidate for archive, highlight, or shareable replay.",
+        "play_later": "Candidate for future callback or replay if freshness allows.",
+    }
+
+    return append_event({
+        "id": event_id(
+            "reaction",
+            now,
+            STATION.id,
+            reaction,
+            ip_hash,
+            track,
+            str(track_info.get("timestamp") or ""),
+        ),
+        "station_id": STATION.id,
+        "type": "listener_reaction",
+        "time": now,
+        "reaction": reaction,
+        "reaction_label": reaction_label,
+        "source": source,
+        "ip_hash": ip_hash,
+        "status": "new",
+        "track": track,
+        "track_type": track_info.get("type"),
+        "show_id": show_id or None,
+        "show": track_info.get("show"),
+        "host": track_info.get("host"),
+        "segment_type": track_info.get("segment_type"),
+        "caption": track_info.get("caption"),
+        "slot": track_info.get("slot"),
+        "tags": tags,
+        "operator_note": operator_notes.get(reaction, ""),
+    })
+
+
 def add_diary(text: str, mode: str | None = None, tags: list[str] | None = None) -> bool:
     """Append a free-form diary entry from the operator.
 

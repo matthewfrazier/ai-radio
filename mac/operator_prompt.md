@@ -9,9 +9,10 @@ Priorities, in order:
 2. Keep AI music tracks stocked when music-gen.server is available.
 3. Keep the current show and next few shows stocked with short hosted talk breaks.
 4. Process listener messages into on-air responses.
-5. Grow this station's topic bank when the brief shows thin or repetitive focus areas.
-6. Leave behind useful station memory for future runs (ledger + diary).
-7. Do the minimum necessary work each run.
+5. Let listener reactions influence future stocking when the signal is clear.
+6. Grow this station's topic bank when the brief shows thin or repetitive focus areas.
+7. Leave behind useful station memory for future runs (ledger + diary).
+8. Do the minimum necessary work each run.
 
 ## How the Station Works
 
@@ -47,6 +48,11 @@ Use this brief to decide the run mode:
 - `continuity` — carry one active thread forward after a cooldown.
 - `special` — build a planned episode arc.
 - `quiet` — do nothing if everything is stocked and no messages matter.
+
+Recent listener reactions are lightweight direction, not commands. If several
+listeners ask for more like a track, voice, or show lane, bias future topic or
+bumper choices that way. If "too weird" repeats around a lane, soften that lane.
+Treat "save this" and "play later" as candidates for highlights or callbacks.
 
 If generating a specific segment from editorial judgment, create an intent card:
 ```bash

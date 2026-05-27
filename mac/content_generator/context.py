@@ -66,6 +66,14 @@ def recent_listener_events(limit: int = 8) -> list[dict[str, Any]]:
     return events[-limit:]
 
 
+def recent_listener_reactions(limit: int = 8) -> list[dict[str, Any]]:
+    events = [
+        e for e in read_events()
+        if e.get("type") == "listener_reaction"
+    ]
+    return events[-limit:]
+
+
 def relevant_threads(show_id: str | None = None, limit: int = 5) -> list[dict[str, Any]]:
     threads = [t for t in load_active_threads() if t.get("status", "active") == "active"]
     if show_id:
@@ -115,6 +123,7 @@ def build_operator_brief(min_segments: int = 3) -> dict[str, Any]:
         "active_threads": relevant_threads(resolved.show_id),
         "operator_topic_bank": topic_bank_summary(focuses),
         "recent_listener_events": recent_listener_events(),
+        "recent_listener_reactions": recent_listener_reactions(),
         "recent_show_memory": recent_show_entries(resolved.show_id),
         "recent_diary": recent_diary_entries(limit=6),
     }
@@ -160,6 +169,16 @@ def format_operator_brief(brief: dict[str, Any]) -> str:
         lines.extend(["", "Recent listener material:"])
         for event in brief["recent_listener_events"][-5:]:
             lines.append(f"- [{event.get('status')}] {event.get('text')}")
+
+    if brief.get("recent_listener_reactions"):
+        lines.extend(["", "Recent listener reactions:"])
+        for event in brief["recent_listener_reactions"][-5:]:
+            label = event.get("reaction_label") or event.get("reaction")
+            track = event.get("track") or "unknown track"
+            show = event.get("show") or event.get("show_id") or "unknown show"
+            note = event.get("operator_note") or ""
+            note_suffix = f" - {note}" if note else ""
+            lines.append(f"- [{label}] {track} ({show}){note_suffix}")
 
     if brief["recent_show_memory"]:
         lines.extend(["", "Recent show memory:"])

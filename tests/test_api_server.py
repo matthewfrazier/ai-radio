@@ -37,10 +37,19 @@ class ApiServerTests(unittest.TestCase):
             api_server.parse_station_route("/klod-fm/message"),
             ("klod-fm", "/message"),
         )
+        self.assertEqual(
+            api_server.parse_station_route("/klod-fm/reaction"),
+            ("klod-fm", "/reaction"),
+        )
 
     def test_unknown_non_station_route_is_ignored(self):
         self.assertIsNone(api_server.parse_station_route("/assets/app.js"))
         self.assertIsNone(api_server.parse_station_route("/now-playing"))
+
+    def test_reaction_tokens_are_normalized(self):
+        self.assertEqual(api_server.normalize_reaction("more-like-this"), "more_like_this")
+        self.assertEqual(api_server.normalize_reaction("great voice"), "great_voice")
+        self.assertIsNone(api_server.normalize_reaction("skip"))
 
     def test_standalone_api_health_does_not_require_local_streamer(self):
         with (
