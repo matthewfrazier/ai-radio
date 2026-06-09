@@ -77,7 +77,7 @@ The public site is configured separately through `cloudflared` and the static as
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install system dependencies (macOS)
-brew install icecast ffmpeg ezstream vorbis-tools
+brew install tmux icecast ffmpeg ezstream vorbis-tools
 
 # Set up Python environment
 uv sync
