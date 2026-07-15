@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# WRIT-FM stream loop: concat-loop the rendered segments into Icecast /stream, forever.
+# Run under systemd (writ-stream.service). Reads /opt/writ-fm/stub_audio/concat.txt,
+# which panel.py rebuilds on every Apply.
+set -uo pipefail
+DIR="$(cd "$(dirname "$0")" && pwd)"
+[ -f "$DIR/.stubenv" ] && . "$DIR/.stubenv"
+AUDIO=/opt/writ-fm/stub_audio
+SRCPW="${SRCPW:?set SRCPW in .stubenv (icecast source password)}"
+exec ffmpeg -hide_banner -loglevel warning -re -stream_loop -1 \
+  -f concat -safe 0 -i "$AUDIO/concat.txt" \
+  -c:a libvorbis -q:a 4 -content_type audio/ogg -f ogg \
+  "icecast://source:${SRCPW}@127.0.0.1:8000/stream"
