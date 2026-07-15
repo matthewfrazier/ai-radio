@@ -58,3 +58,12 @@ uv.lock
 
 # Kokoro venv
 mac/kokoro/.venv/
+
+# ai-radio overlay: secrets + runtime state + generated artifacts
+jellyfin.conf
+.stubenv
+music_playlist.txt
+current_source.txt
+station.json
+stub_audio/
+*.bak
