@@ -1,0 +1,4 @@
+# ai-radio Jellyfin source config (chmod 600, never commit the real one)
+JELLYFIN_URL=http://<jellyfin-host>:8096
+JELLYFIN_USER=<user>
+JELLYFIN_PASS=<password-from-vault>
