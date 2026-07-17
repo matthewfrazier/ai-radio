@@ -1,0 +1,6 @@
+[Unit]
+Description=WRIT-FM programming-block artifact cleanup (removes old unreferenced blocks)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/writ-fm/scripts/cleanup-blocks.sh

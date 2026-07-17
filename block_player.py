@@ -50,10 +50,11 @@ def _on_skip(signum, frame):
 
 
 def load_srcpw():
-    for line in open(STUBENV):
-        line = line.strip()
-        if line.startswith("SRCPW="):
-            return line.split("=", 1)[1]
+    with open(STUBENV) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("SRCPW="):
+                return line.split("=", 1)[1]
     raise RuntimeError("SRCPW not found in .stubenv")
 
 

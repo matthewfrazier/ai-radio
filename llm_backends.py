@@ -18,11 +18,12 @@ LLM_BACKENDS = {
 
 def _load_anthropic_conf(path=ANTHROPIC_CONF):
     c = {}
-    for line in open(path):
-        line = line.strip()
-        if "=" in line and not line.startswith("#"):
-            k, v = line.split("=", 1)
-            c[k] = v
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                c[k] = v
     return c
 
 

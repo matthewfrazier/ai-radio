@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -212,6 +213,50 @@ class RenderMergeTests(unittest.TestCase):
         self.assertEqual(result["title"], "edited mid-render")       # concurrent edit preserved
         self.assertEqual(result["segments"][0]["status"], "ok")      # resolution merged in
         self.assertEqual(result["segments"][0]["resolved"]["url"], "http://x/newscast.mp3")
+
+
+class CleanupTests(unittest.TestCase):
+    """cleanup_blocks removes old, unreferenced block dirs and keeps anything
+    queued/scheduled or recent -- the disk-hygiene fix for unbounded render
+    artifact growth."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        base = self._tmpdir.name
+        self._patches = [
+            patch.object(block_render, "BLOCKS_DIR", os.path.join(base, "program_blocks")),
+            patch.object(block_render, "QUEUE_FILE", os.path.join(base, "block_queue.json")),
+            patch.object(block_render, "SCHEDULE_FILE", os.path.join(base, "schedule.json")),
+            patch.object(block_render, "STATE_LOCK", os.path.join(base, ".state.lock")),
+        ]
+        for p in self._patches:
+            p.start()
+        os.makedirs(block_render.BLOCKS_DIR)
+
+    def tearDown(self):
+        for p in reversed(self._patches):
+            p.stop()
+        self._tmpdir.cleanup()
+
+    def _mk(self, bid, age_days):
+        d = block_render.block_dir(bid)
+        os.makedirs(d)
+        mf = os.path.join(d, "block.json")
+        with open(mf, "w") as f:
+            f.write("{}")
+        t = time.time() - age_days * 86400
+        os.utime(mf, (t, t))
+
+    def test_removes_old_unreferenced_keeps_the_rest(self):
+        self._mk("20200101T000000", 30)   # old + unreferenced -> remove
+        self._mk("20200102T000000", 30)   # old but queued -> keep
+        self._mk("20990101T000000", 0)    # recent -> keep
+        block_render.save_queue(["20200102T000000"])
+        removed = block_render.cleanup_blocks(max_age_days=14)
+        self.assertEqual(removed, ["20200101T000000"])
+        self.assertFalse(os.path.isdir(block_render.block_dir("20200101T000000")))
+        self.assertTrue(os.path.isdir(block_render.block_dir("20200102T000000")))
+        self.assertTrue(os.path.isdir(block_render.block_dir("20990101T000000")))
 
 
 class StalenessTests(unittest.TestCase):

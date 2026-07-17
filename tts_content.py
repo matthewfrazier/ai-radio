@@ -11,11 +11,12 @@ WEATHER_CONF = "/opt/writ-fm/weather.conf"
 
 def load_weather_conf(path=WEATHER_CONF):
     c = {}
-    for line in open(path):
-        line = line.strip()
-        if "=" in line and not line.startswith("#"):
-            k, v = line.split("=", 1)
-            c[k] = v
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                c[k] = v
     return c
 
 

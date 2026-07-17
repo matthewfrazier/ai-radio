@@ -479,7 +479,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, "application/json",
                                   json.dumps({"ok": False, "log": str(e)}).encode())
         if u.path.endswith("/api/apply"):
-            n = int(self.headers.get("Content-Length", 0))
+            n = int(self.headers.get("Content-Length", 0) or 0)
             body = json.loads(self.rfile.read(n) or b"{}")
             cfg = load_cfg()
             for k in ("kokoro", "voice", "speed", "segments"):
@@ -495,7 +495,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, "application/json", json.dumps(
                     {"ok": False, "error": str(e), "log": ""}).encode())
         if u.path.endswith("/api/source"):
-            n=int(self.headers.get("Content-Length",0))
+            n=int(self.headers.get("Content-Length",0) or 0)
             body=json.loads(self.rfile.read(n) or b"{}")
             p=subprocess.run(["python3","/opt/writ-fm/jf_source.py","set",body.get("source","")],capture_output=True,text=True)
             return self._send(200,"application/json",(p.stdout or '{"ok":false}').encode())

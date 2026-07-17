@@ -7,10 +7,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-for unit in systemd/*.service; do
+for unit in systemd/*.service systemd/*.timer; do
+  [ -e "$unit" ] || continue
   install -m 0644 "$unit" "/etc/systemd/system/$(basename "$unit")"
   echo "installed: /etc/systemd/system/$(basename "$unit")"
 done
 
 systemctl daemon-reload
 echo "systemctl daemon-reload done"
+
+# Timers are enabled to fire on schedule; the player service is started on
+# demand by the panel, so it is intentionally not enabled here.
+for timer in systemd/*.timer; do
+  [ -e "$timer" ] || continue
+  systemctl enable --now "$(basename "$timer")"
+  echo "enabled: $(basename "$timer")"
+done

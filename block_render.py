@@ -28,6 +28,7 @@ BASE = "/opt/writ-fm"
 BLOCKS_DIR = os.path.join(BASE, "program_blocks")
 STATION_CFG = os.path.join(BASE, "station.json")
 QUEUE_FILE = os.path.join(BASE, "block_queue.json")
+SCHEDULE_FILE = os.path.join(BASE, "schedule.json")
 STATE_LOCK = os.path.join(BASE, ".state.lock")
 
 
@@ -132,6 +133,35 @@ def delete_block(block_id):
         shutil.rmtree(d)
 
 
+def load_schedule():
+    if not os.path.exists(SCHEDULE_FILE):
+        return []
+    with open(SCHEDULE_FILE) as f:
+        return json.load(f).get("entries", [])
+
+
+def cleanup_blocks(max_age_days=14):
+    """Remove program_blocks/ dirs older than max_age_days that aren't
+    referenced by the live queue or the schedule. Runs from a systemd timer;
+    without it, render artifacts (rendered TTS ogg, resolved playlists) grow
+    unbounded at 24/7 cadence on a disk-tight box."""
+    if not os.path.isdir(BLOCKS_DIR):
+        return []
+    keep = set(load_queue()) | {e.get("block_id") for e in load_schedule()}
+    cutoff = time.time() - max_age_days * 86400
+    removed = []
+    for bid in os.listdir(BLOCKS_DIR):
+        d = os.path.join(BLOCKS_DIR, bid)
+        if not os.path.isdir(d) or bid in keep:
+            continue
+        manifest = os.path.join(d, "block.json")
+        mtime = os.path.getmtime(manifest) if os.path.exists(manifest) else os.path.getmtime(d)
+        if mtime < cutoff:
+            shutil.rmtree(d)
+            removed.append(bid)
+    return removed
+
+
 def create_block(title):
     bid = new_block_id()
     block = {"id": bid, "title": title or bid, "created_at": now_iso(), "updated_at": now_iso(),
@@ -214,11 +244,16 @@ def render_tts_segment(bdir, seg, cfg):
 
     wav_path = os.path.join(bdir, f"tts_{seg['id']}.wav")
     ogg_path = os.path.join(bdir, f"tts_{seg['id']}.ogg")
-    with open(wav_path, "wb") as f:
-        f.write(wav_bytes)
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", wav_path,
-                    "-c:a", "libvorbis", "-q:a", "4", ogg_path], check=True)
-    os.remove(wav_path)
+    try:
+        with open(wav_path, "wb") as f:
+            f.write(wav_bytes)
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", wav_path,
+                        "-c:a", "libvorbis", "-q:a", "4", ogg_path], check=True)
+    finally:
+        # remove the intermediate wav even if the ffmpeg convert raised, so a
+        # failed render doesn't strand a large wav on every retry.
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
 
     seg["resolved"] = {"title": title, "text": text, "audio_path": os.path.basename(ogg_path),
                         "duration_s": _probe_duration(ogg_path)}

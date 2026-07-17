@@ -14,11 +14,12 @@ CONF_DEFAULT = "/opt/writ-fm/jellyfin.conf"
 
 def load_conf(path=CONF_DEFAULT):
     c = {}
-    for line in open(path):
-        line = line.strip()
-        if "=" in line and not line.startswith("#"):
-            k, v = line.split("=", 1)
-            c[k] = v
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                c[k] = v
     return c
 
 

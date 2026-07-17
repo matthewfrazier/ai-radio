@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily cleanup of old programming-block render artifacts
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
