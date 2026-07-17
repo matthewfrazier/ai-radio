@@ -31,8 +31,8 @@ button:disabled{opacity:.5;cursor:progress}
 pre{white-space:pre-wrap;background:#8881;padding:.6rem;border-radius:10px;font-size:.78rem;max-height:16rem;overflow:auto}
 audio{width:100%;margin-top:.5rem}
 a{color:#3b82f6}
-.seg{padding:.7rem 0;border-bottom:1px solid #8882}
-.seg:last-child{border-bottom:none}
+.seg{padding:.7rem .8rem;margin-bottom:.7rem;border-radius:12px;border:1px solid #8884;background:rgba(128,128,128,.08)}
+.seg:last-child{margin-bottom:0}
 .seg .hd{display:flex;justify-content:space-between;align-items:center;gap:.5rem}
 .seg .hd .left{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;min-width:0}
 .seg .hd .left .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
