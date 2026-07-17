@@ -46,6 +46,9 @@ a{color:#3b82f6}
 .blocklist div:last-child{border-bottom:none}
 .blocklist div:active{opacity:.6}
 .addtype{display:flex;gap:.5rem;flex-wrap:wrap}
+.days{display:flex;gap:.3rem;flex-wrap:wrap;margin:.3rem 0}
+.dayBtn{padding:.3rem .5rem;font-size:.78rem}
+.dayBtn.on{background:#3b82f6;color:#fff;border-color:#3b82f6}
 </style></head><body>
 <h1>Programming blocks</h1>
 <div class="sub"><a href="/admin">&larr; station control</a> &middot; ai-radio</div>
@@ -105,12 +108,25 @@ a{color:#3b82f6}
 </section>
 </div>
 
+<section>
+  <div class="hd2"><h2>Scheduled blocks</h2></div>
+  <div class="sub">Blocks queued automatically at a set time (checked every 30s).</div>
+  <div id="schedList"></div>
+  <div class="actions">
+    <button class="ghost" id="btnAddSched" type="button">+ Add schedule</button>
+    <button id="btnSaveSched" type="button">Save schedule</button>
+    <span id="schedSaveMsg" class="sub"></span>
+  </div>
+</section>
+
 <audio id="shared" controls style="width:100%;margin-top:1rem"></audio>
 
 <script>
 const $=id=>document.getElementById(id);
 const BASE=location.pathname.replace(/\/+$/,'');
 let block=null, liveSources=[], llmBackends=[], ttsEngines=[], previewQueue=[], previewIdx=0;
+let allBlocks=[], schedEntries=[];
+const DAY_LABELS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 
 // Escape before interpolating any operator/Jellyfin-sourced text into
 // innerHTML (block titles, queries, prompts, track names) -- otherwise a
@@ -162,15 +178,67 @@ function segTitle(seg){
 }
 
 async function loadBlockList(){
-  const list=await (await fetch(BASE+'/api/blocks')).json();
+  allBlocks=await (await fetch(BASE+'/api/blocks')).json();
   const el=$('blockList'); el.innerHTML='';
-  list.forEach(b=>{
+  allBlocks.forEach(b=>{
     const d=document.createElement('div');
     d.innerHTML=`<span>${esc(b.title)} &middot; ${b.segment_count} segments &middot; ${esc(b.schedule.state)}</span><span class="sub">${esc(b.id)}</span>`;
     d.onclick=()=>openBlock(b.id);
     el.appendChild(d);
   });
+  renderSchedule();  // block dropdowns depend on the current block list
 }
+
+function blockOptions(sel){
+  return allBlocks.map(b=>`<option value="${esc(b.id)}" ${b.id===sel?'selected':''}>${esc(b.title)}</option>`).join('');
+}
+
+function renderSchedule(){
+  const el=$('schedList'); if(!el) return; el.innerHTML='';
+  schedEntries.forEach((e,i)=>{
+    const d=document.createElement('div'); d.className='seg';
+    const days=e.days||[];
+    const dayBtns=DAY_LABELS.map((lbl,di)=>
+      `<button type="button" class="ghost dayBtn${days.includes(di)?' on':''}" data-day="${di}">${lbl}</button>`).join('');
+    d.innerHTML=`<div class="row">
+        <div><label>Block</label><select data-sf="block_id"><option value="">(pick block)</option>${blockOptions(e.block_id)}</select></div>
+        <div style="max-width:7rem"><label>Time</label><input type="time" data-sf="time" value="${esc(e.time||'09:00')}"></div>
+      </div>
+      <label>Days (none = daily)</label><div class="days">${dayBtns}</div>
+      <div class="actions"><label style="display:inline">Enabled <input type="checkbox" data-sf="enabled" ${e.enabled!==false?'checked':''} style="width:auto"></label>
+        <button class="danger" type="button" data-srem="1">Remove</button></div>`;
+    d.querySelector('[data-sf="block_id"]').onchange=ev=>e.block_id=ev.target.value;
+    d.querySelector('[data-sf="time"]').onchange=ev=>e.time=ev.target.value;
+    d.querySelector('[data-sf="enabled"]').onchange=ev=>e.enabled=ev.target.checked;
+    d.querySelectorAll('.dayBtn').forEach(b=>b.onclick=()=>{
+      const di=+b.dataset.day; e.days=e.days||[];
+      const at=e.days.indexOf(di);
+      if(at>=0) e.days.splice(at,1); else e.days.push(di);
+      b.classList.toggle('on');
+    });
+    d.querySelector('[data-srem]').onclick=()=>{ schedEntries.splice(i,1); renderSchedule(); };
+    el.appendChild(d);
+  });
+}
+
+async function loadSchedule(){
+  schedEntries=(await (await fetch(BASE+'/api/schedule')).json()).entries||[];
+  renderSchedule();
+}
+$('btnAddSched').onclick=()=>{
+  schedEntries.push({id:'sch-'+Date.now(), block_id:'', time:'09:00', days:[], enabled:true});
+  renderSchedule();
+};
+$('btnSaveSched').onclick=async()=>{
+  const tick=tickerFor($('schedSaveMsg'), 20000);
+  tick.set('saving...');
+  try{
+    const r=await (await fetch(BASE+'/api/schedule',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({entries:schedEntries}),signal:tick.signal})).json();
+    schedEntries=r.entries||schedEntries;
+    tick.done(schedEntries.length+' entries saved');
+  }catch(e){ tick.fail(e); }
+};
 
 async function openBlock(id){
   block=await (await fetch(BASE+'/api/blocks/'+id)).json();
@@ -457,7 +525,8 @@ $('btnMd').onclick=async()=>{
 
 (async function init(){
   liveSources=await (await fetch(BASE+'/api/live_sources')).json();
-  await loadBlockList();
+  await loadBlockList();  // populates allBlocks (schedule block dropdowns need it)
+  await loadSchedule();
 })();
 </script>
 </body></html>"""

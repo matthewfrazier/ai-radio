@@ -9,7 +9,10 @@ import json
 import os
 import re
 import subprocess
+import threading
+import time
 import urllib.request
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -344,6 +347,26 @@ def stop_block_player():
     subprocess.run(["systemctl", "stop", PLAYER_UNIT], capture_output=True)
 
 
+_sched_last_fired = {}
+
+
+def _scheduler_tick():
+    """Background thread: once every 30s (so each minute is sampled), queue
+    any schedule entry that's due. 30s < 60s guarantees no minute is skipped;
+    due_entries dedups so an entry fires once per matching minute."""
+    while True:
+        time.sleep(30)
+        try:
+            due = block_render.due_entries(block_render.load_schedule(), datetime.now(), _sched_last_fired)
+            for block_id in due:
+                try:
+                    schedule_block(block_id, "queue")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+
 def delete_block_safe(block_id):
     queue = block_render.load_queue()
     if queue and queue[0] == block_id:
@@ -407,6 +430,8 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, "application/json", json.dumps(block_render.list_blocks()).encode())
                 if route == ["live_sources"]:
                     return self._send(200, "application/json", json.dumps(live_source.load_sources()).encode())
+                if route == ["schedule"]:
+                    return self._send(200, "application/json", json.dumps({"entries": block_render.load_schedule()}).encode())
                 if route == ["live_test"]:
                     q = parse_qs(u.query)
                     r = live_source.resolve_live(q.get("source_id", [""])[0])
@@ -508,6 +533,9 @@ class H(BaseHTTPRequestHandler):
                 if route == ["blocks", "stop"]:
                     stop_block_player()
                     return self._send(200, "application/json", json.dumps({"ok": True}).encode())
+                if route == ["schedule"]:
+                    block_render.save_schedule(body.get("entries", []))
+                    return self._send(200, "application/json", json.dumps({"ok": True, "entries": block_render.load_schedule()}).encode())
                 if route == ["llm_test"]:
                     text = llm_backends.generate(body["backend"], body["model"], body["prompt"])
                     return self._send(200, "application/json", json.dumps({"text": text}).encode())
@@ -557,4 +585,5 @@ if __name__ == "__main__":
             _start_player()
     except Exception:
         pass
+    threading.Thread(target=_scheduler_tick, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()

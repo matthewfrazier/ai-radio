@@ -140,6 +140,41 @@ def load_schedule():
         return json.load(f).get("entries", [])
 
 
+def save_schedule(entries):
+    with _state_lock():
+        tmp = SCHEDULE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"entries": entries}, f, indent=2)
+        os.replace(tmp, SCHEDULE_FILE)
+
+
+def due_entries(entries, now_dt, last_fired):
+    """Pure: which block_ids should be queued at now_dt. An entry fires once
+    per matching minute (last_fired dedups, keyed by entry id) when enabled,
+    its HH:MM matches, and today is in its days list (empty/missing = daily;
+    weekday(): Mon=0..Sun=6). Separate from the upstream config/schedule.yaml
+    show schedule -- that's the mac/ framework's which-AI-show-airs model, not
+    these operator-built blocks."""
+    stamp = now_dt.strftime("%Y-%m-%d %H:%M")
+    hhmm = now_dt.strftime("%H:%M")
+    fired = []
+    for e in entries:
+        if not e.get("enabled", True):
+            continue
+        if e.get("time") != hhmm:
+            continue
+        days = e.get("days")
+        if days and now_dt.weekday() not in days:
+            continue
+        eid = e.get("id")
+        if last_fired.get(eid) == stamp:
+            continue
+        last_fired[eid] = stamp
+        if e.get("block_id"):
+            fired.append(e["block_id"])
+    return fired
+
+
 def cleanup_blocks(max_age_days=14):
     """Remove program_blocks/ dirs older than max_age_days that aren't
     referenced by the live queue or the schedule. Runs from a systemd timer;

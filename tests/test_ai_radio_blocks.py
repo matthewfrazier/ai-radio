@@ -259,6 +259,48 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue(os.path.isdir(block_render.block_dir("20990101T000000")))
 
 
+class SchedulerTests(unittest.TestCase):
+    """due_entries is a pure function so the firing logic is testable without
+    a running clock: pass an explicit now and a last_fired dict."""
+
+    def _entry(self, **kw):
+        base = {"id": "e1", "block_id": "20260101T000000", "time": "09:00", "enabled": True}
+        base.update(kw)
+        return base
+
+    def test_fires_at_matching_minute(self):
+        now = datetime(2026, 7, 17, 9, 0)  # a Friday
+        self.assertEqual(block_render.due_entries([self._entry()], now, {}), ["20260101T000000"])
+
+    def test_does_not_fire_off_minute(self):
+        now = datetime(2026, 7, 17, 9, 1)
+        self.assertEqual(block_render.due_entries([self._entry()], now, {}), [])
+
+    def test_disabled_entry_never_fires(self):
+        now = datetime(2026, 7, 17, 9, 0)
+        self.assertEqual(block_render.due_entries([self._entry(enabled=False)], now, {}), [])
+
+    def test_fires_once_per_minute(self):
+        now = datetime(2026, 7, 17, 9, 0)
+        seen = {}
+        self.assertEqual(block_render.due_entries([self._entry()], now, seen), ["20260101T000000"])
+        self.assertEqual(block_render.due_entries([self._entry()], now, seen), [])  # deduped
+        # next day's same minute fires again
+        self.assertEqual(block_render.due_entries([self._entry()], datetime(2026, 7, 18, 9, 0), seen),
+                         ["20260101T000000"])
+
+    def test_days_filter(self):
+        friday = datetime(2026, 7, 17, 9, 0)     # weekday()==4
+        saturday = datetime(2026, 7, 18, 9, 0)   # weekday()==5
+        weekdays_only = self._entry(days=[0, 1, 2, 3, 4])
+        self.assertEqual(block_render.due_entries([weekdays_only], friday, {}), ["20260101T000000"])
+        self.assertEqual(block_render.due_entries([weekdays_only], saturday, {}), [])
+
+    def test_empty_days_is_daily(self):
+        saturday = datetime(2026, 7, 18, 9, 0)
+        self.assertEqual(block_render.due_entries([self._entry(days=[])], saturday, {}), ["20260101T000000"])
+
+
 class StalenessTests(unittest.TestCase):
     """Pure logic, no I/O: TTS staleness is the mechanism that guarantees a
     weather segment never airs stale."""
