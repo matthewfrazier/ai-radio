@@ -211,10 +211,16 @@ def render_block(block_id, force=False):
     changed = False
     for seg in block["segments"]:
         try:
-            if seg["type"] == "live" and (force or seg.get("status") != "ok"):
+            # live/music are always re-resolved -- cheap config-lookup/ICY-probe
+            # or Jellyfin-list calls, no external cost to worry about like the
+            # weather API, so there's no reason to cache them and every reason
+            # not to: a stale cached URL survives config changes indefinitely
+            # otherwise (e.g. a live-sources.json fix never takes effect on an
+            # already-resolved segment without a manual force-render).
+            if seg["type"] == "live":
                 resolve_live_segment(seg)
                 changed = True
-            elif seg["type"] == "music" and (force or seg.get("status") != "ok"):
+            elif seg["type"] == "music":
                 resolve_music_segment(seg, bdir)
                 changed = True
             elif seg["type"] == "tts" and (force or is_stale(seg)):

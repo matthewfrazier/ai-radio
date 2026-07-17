@@ -193,18 +193,31 @@ function segForm(seg,i){
       </div>
       <label>TTL before re-render (s)</label><input type="number" data-f="ttl_s" value="${seg.params.ttl_s||1800}">`;
   }
+  const dotClass = seg.status==='ok' ? 'ok' : (seg.status==='error' ? 'bad' : '');
   return `<div class="hd">
-      <span class="left"><span class="badge">${seg.type}</span><span class="name">${segTitle(seg)}</span><span class="sub testmsg" data-role="status">${seg.status||'unresolved'}</span></span>
+      <span class="left"><span class="dot ${dotClass}" data-role="statusdot" title="${seg.status||'unresolved'}"></span><span class="badge">${seg.type}</span><span class="name">${segTitle(seg)}</span></span>
       <span class="move"><button class="ghost" data-act="up">&uarr;</button><button class="ghost" data-act="down">&darr;</button><button class="danger kill" data-act="remove">&times;</button></span></div>
     ${body}
     <div class="actions"><button class="ghost" data-act="test">Test</button><span class="testmsg" data-role="testmsg"></span></div>
     ${seg.type==='music'?'<div class="tracklist"></div>':''}`;
 }
 
+function setSegDot(el, state){
+  // state: 'ok' | 'bad' | '' (unresolved/untested) -- attached directly to
+  // the segment card it describes, and updated live by Test/edits rather
+  // than only reflecting whatever was true at the last full save.
+  const dot=el.querySelector('[data-role=statusdot]');
+  dot.className='dot'+(state?' '+state:'');
+  dot.title=state==='ok'?'ok':(state==='bad'?'error':'unresolved');
+}
+
 function wireSegHandlers(){
   document.querySelectorAll('#segments .seg').forEach((el,i)=>{
     el.querySelectorAll('[data-f]').forEach(inp=>{
       inp.onchange=()=>{ block.segments[i].params[inp.dataset.f]=inp.type==='number'?parseFloat(inp.value):inp.value;
+        // editing invalidates whatever was last resolved/tested for this segment
+        block.segments[i].status=undefined;
+        setSegDot(el,'');
         if(inp.dataset.f==='topic') renderSegments(); };
     });
     el.querySelectorAll('[data-act]').forEach(btn=>{
@@ -260,11 +273,13 @@ async function testSegment(seg,el){
       const r=await (await fetch(BASE+'/api/live_test?source_id='+encodeURIComponent(seg.params.source_id),{signal:tick.signal})).json();
       if(r.error) throw new Error(r.error);
       shared.src=r.url; shared.play();
+      seg.status='ok'; setSegDot(el,'ok');
       tick.done('playing: '+r.title);
     } else if(seg.type==='music'){
       tick.set('resolving tracks...');
       const r=await (await fetch(BASE+'/api/music_test?q='+encodeURIComponent(seg.params.query||''),{signal:tick.signal})).json();
       if(r.error) throw new Error(r.error);
+      seg.status='ok'; setSegDot(el,'ok');
       tick.done(r.track_count+' tracks ('+r.title+')');
       const tl=el.querySelector('.tracklist'); tl.innerHTML='';
       r.tracks.slice(0,30).forEach(t=>{
@@ -287,9 +302,11 @@ async function testSegment(seg,el){
       tick.set('rendering audio...');
       const blob=await resp.blob();
       shared.src=URL.createObjectURL(blob); shared.play();
+      seg.status='ok'; setSegDot(el,'ok');
       tick.done('playing');
     }
   }catch(e){
+    seg.status='error'; setSegDot(el,'bad');
     tick.fail(e);
   }finally{
     btn.disabled=false;
@@ -366,7 +383,11 @@ $('btnBuildPreview').onclick=async()=>{
       else if(seg.type==='music'){
         try{
           const m=await (await fetch(BASE+'/api/music_test?q='+encodeURIComponent(seg.params.query||''))).json();
-          if(m.tracks&&m.tracks[0]) previewQueue.push({label:'music: '+m.title, url:m.tracks[0].url});
+          // preview several tracks, not just one -- a single track stopping
+          // after ~3min looked like a bug against a segment configured for
+          // 900s. Capped at 10 (a preview auditions the segment, it doesn't
+          // need to fill the full configured air-time).
+          (m.tracks||[]).slice(0,10).forEach(t=>previewQueue.push({label:'music: '+m.title+' — '+t.name, url:t.url}));
         }catch(e){}
       }
     }
@@ -379,7 +400,7 @@ function playPreview(){
   if(!previewQueue.length) return;
   const item=previewQueue[previewIdx];
   const a=$('previewAudio'); a.src=item.url; a.play();
-  $('previewMsg').textContent=(previewIdx+1)+'/'+previewQueue.length+' &middot; '+item.label;
+  $('previewMsg').textContent=(previewIdx+1)+'/'+previewQueue.length+' · '+item.label;
 }
 $('previewAudio').onended=()=>{ if(previewIdx<previewQueue.length-1){ previewIdx++; playPreview(); } };
 $('btnPrev').onclick=()=>{ if(previewIdx>0){ previewIdx--; playPreview(); } };
