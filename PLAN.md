@@ -6,6 +6,24 @@ This plan supersedes ad-hoc iteration: work the phases in order, each phase
 lands as its own verified commit(s), and nothing outside a phase gets touched
 while it's in flight.
 
+## Resolution (2026-07-17) — executed
+
+P0–P3 all landed as verified commits (traversal/rmtree, play-now no-op,
+player wedge; air-time re-render, systemd-supervised player with Conflicts=
+mount arbitration + journald logging + flock; save-before-act, preview
+fidelity, FIFO write loop, HTML escaping; disk hygiene + Content-Length +
+conf handles; the time-based scheduler). Each was exercised against the live
+service (play-now cutover, drain, SIGKILL recovery, boot reconciliation, a
+real timed scheduler fire) plus 44 unit tests. Strategic: live sources
+relabeled honestly (3 real bulletins vs 8 "(live)" relays, item 16); fleet
+Playwright host requested on the bus (item 17). **Item 15 (config lift of
+BASE/endpoints into station.json) intentionally NOT done** — BASE is a fixed
+dedicated-CT path (not an environment that varies), llm_backends can't import
+block_render without a cycle, and the plan's own "do NOT churn / defer the
+package move" guidance applies; it's a testability nicety with no goal/safety
+value, so forcing a cross-module refactor into a live 24/7 station was judged
+the wrong call. Revisit only alongside a future "graduate to own CT" move.
+
 ## Where the project actually stands
 
 Everything in the literal goal list is implemented and most of it is

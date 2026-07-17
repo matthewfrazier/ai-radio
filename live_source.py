@@ -37,14 +37,19 @@ DEFAULT_SOURCES = [
     {"id": "dw_brief", "name": "DW News Brief", "kind": "podcast_latest",
      "feed_url": "https://rss.dw.com/syndication/feeds/podcast_en_newsbrief.33191-mrss.xml",
      "homepage": "https://www.dw.com/en/dw-news/program-262267"},
-    {"id": "cnn", "name": "CNN", "url": "https://tunein.cdnstream1.com/2868_96.mp3", "homepage": "https://www.cnn.com/audio"},
-    {"id": "fox_news_radio", "name": "Fox News Radio", "url": "https://live.amperwave.net/direct/foxnewsradio-foxnewsradioaac-imc?source=fnr.web", "homepage": "https://www.foxnewsradio.com/"},
-    {"id": "msnbc", "name": "MSNBC", "url": "https://tunein.cdnstream1.com/3511_96.mp3", "homepage": "https://www.msnbc.com/"},
-    {"id": "nbc_news_radio", "name": "NBC News Radio", "url": "http://stream.revma.ihrhls.com/zc6043", "homepage": "https://nbcnewsradio.com/"},
-    {"id": "bloomberg_radio", "name": "Bloomberg Radio", "url": "http://26433.live.streamtheworld.com/WBBRAMAAC_SC", "homepage": "https://www.bloomberg.com/audio"},
-    {"id": "deutschlandfunk", "name": "Deutschlandfunk", "url": "https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3?aggregator=web", "homepage": "https://www.deutschlandfunk.de/"},
-    {"id": "rfi_monde", "name": "RFI Monde", "url": "http://live02.rfi.fr/rfimonde-64.mp3", "homepage": "https://www.rfi.fr/"},
-    {"id": "npo_radio1", "name": "NPO Radio 1", "url": "http://icecast.omroep.nl/radio1-bb-mp3", "homepage": "https://www.nporadio1.nl/"},
+    # The rest are full 24/7 live channel relays, not short bulletins -- the
+    # "(live)" suffix keeps the UI honest (a live segment bounded by its
+    # configured duration_s airs whatever is on-air then, not a news brief).
+    # No dedicated bulletin feed was found for these; add one as a
+    # kind:"podcast_latest" source if it turns up.
+    {"id": "cnn", "name": "CNN (live)", "url": "https://tunein.cdnstream1.com/2868_96.mp3", "homepage": "https://www.cnn.com/audio"},
+    {"id": "fox_news_radio", "name": "Fox News Radio (live)", "url": "https://live.amperwave.net/direct/foxnewsradio-foxnewsradioaac-imc?source=fnr.web", "homepage": "https://www.foxnewsradio.com/"},
+    {"id": "msnbc", "name": "MSNBC (live)", "url": "https://tunein.cdnstream1.com/3511_96.mp3", "homepage": "https://www.msnbc.com/"},
+    {"id": "nbc_news_radio", "name": "NBC News Radio (live)", "url": "http://stream.revma.ihrhls.com/zc6043", "homepage": "https://nbcnewsradio.com/"},
+    {"id": "bloomberg_radio", "name": "Bloomberg Radio (live)", "url": "http://26433.live.streamtheworld.com/WBBRAMAAC_SC", "homepage": "https://www.bloomberg.com/audio"},
+    {"id": "deutschlandfunk", "name": "Deutschlandfunk (live)", "url": "https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3?aggregator=web", "homepage": "https://www.deutschlandfunk.de/"},
+    {"id": "rfi_monde", "name": "RFI Monde (live)", "url": "http://live02.rfi.fr/rfimonde-64.mp3", "homepage": "https://www.rfi.fr/"},
+    {"id": "npo_radio1", "name": "NPO Radio 1 (live)", "url": "http://icecast.omroep.nl/radio1-bb-mp3", "homepage": "https://www.nporadio1.nl/"},
 ]
 
 _title_cache = {}  # source_id -> (title, fetched_at)

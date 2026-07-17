@@ -9,6 +9,16 @@ This doc exists so the goal and design survive a host rebuild — it previously
 existed only in an ephemeral Claude Code subagent transcript on this box, which
 is exactly the kind of thing that got lost once already.
 
+> **2026-07-17 hardening pass** — a three-agent review drove a P0–P3 fix
+> sweep (see `PLAN.md`): path-traversal/rmtree and player dead-air/wedge
+> bugs fixed; the player is now a systemd unit (`writ-block-player.service`,
+> installed via `scripts/install-services.sh`) that arbitrates the Icecast
+> mount via `Conflicts=`, logs to journald, recovers from crash/reboot, and
+> re-renders at air time; cross-process `flock`; save-before-act + preview
+> fidelity + HTML escaping; disk-artifact cleanup timer; and a real
+> time-based scheduler (`schedule.json`, `/api/schedule`, "Scheduled blocks"
+> UI). Run `scripts/install-services.sh` once on a fresh clone.
+
 ## Goal (as specified)
 
 Build a new admin UI to manage "programming blocks" (~1 hour each) — an ordered

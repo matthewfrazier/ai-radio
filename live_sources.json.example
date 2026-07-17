@@ -22,49 +22,49 @@
     },
     {
       "id": "cnn",
-      "name": "CNN",
+      "name": "CNN (live)",
       "url": "https://tunein.cdnstream1.com/2868_96.mp3",
       "homepage": "https://www.cnn.com/audio"
     },
     {
       "id": "fox_news_radio",
-      "name": "Fox News Radio",
+      "name": "Fox News Radio (live)",
       "url": "https://live.amperwave.net/direct/foxnewsradio-foxnewsradioaac-imc?source=fnr.web",
       "homepage": "https://www.foxnewsradio.com/"
     },
     {
       "id": "msnbc",
-      "name": "MSNBC",
+      "name": "MSNBC (live)",
       "url": "https://tunein.cdnstream1.com/3511_96.mp3",
       "homepage": "https://www.msnbc.com/"
     },
     {
       "id": "nbc_news_radio",
-      "name": "NBC News Radio",
+      "name": "NBC News Radio (live)",
       "url": "http://stream.revma.ihrhls.com/zc6043",
       "homepage": "https://nbcnewsradio.com/"
     },
     {
       "id": "bloomberg_radio",
-      "name": "Bloomberg Radio",
+      "name": "Bloomberg Radio (live)",
       "url": "http://26433.live.streamtheworld.com/WBBRAMAAC_SC",
       "homepage": "https://www.bloomberg.com/audio"
     },
     {
       "id": "deutschlandfunk",
-      "name": "Deutschlandfunk",
+      "name": "Deutschlandfunk (live)",
       "url": "https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3?aggregator=web",
       "homepage": "https://www.deutschlandfunk.de/"
     },
     {
       "id": "rfi_monde",
-      "name": "RFI Monde",
+      "name": "RFI Monde (live)",
       "url": "http://live02.rfi.fr/rfimonde-64.mp3",
       "homepage": "https://www.rfi.fr/"
     },
     {
       "id": "npo_radio1",
-      "name": "NPO Radio 1",
+      "name": "NPO Radio 1 (live)",
       "url": "http://icecast.omroep.nl/radio1-bb-mp3",
       "homepage": "https://www.nporadio1.nl/"
     }
