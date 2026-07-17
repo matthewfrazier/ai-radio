@@ -5,6 +5,9 @@ dedicated-host deployment overlay on top of the upstream station engine. Pull
 upstream fixes with `git fetch upstream && git merge upstream/main`.
 
 ## What lives here (overlay, not in upstream)
+- `PLAN.md` — the current prioritized revision plan (P0 safety → P1
+  reliability → P2 operator trust → P3 goal completion). Work it in order;
+  read it before starting anything new on the blocks feature.
 - `PROGRAM_BLOCKS.md` — in-progress "programming blocks" admin surface
   (`/blocks`): scheduled hour-long blocks mixing live news, TTS, and Jellyfin
   music. Read this before touching `block_*.py`, `blocks_page.py`,
