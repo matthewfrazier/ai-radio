@@ -1,0 +1,6 @@
+{
+  "sources": [
+    {"id": "npr", "name": "NPR Newscast", "url": "https://npr-ice.streamguys1.com/live.mp3", "homepage": "https://www.npr.org/"},
+    {"id": "bbc_world", "name": "BBC World Service", "url": "https://stream.live.vc.bbcmedia.co.uk/bbc_world_service", "homepage": "https://www.bbc.co.uk/worldserviceradio"}
+  ]
+}

@@ -12,6 +12,17 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
+import signal
+import time
+
+from tts_engines import kokoro_voices, kokoro_speech
+import block_render
+import blocks_page
+import jellyfin_client
+import live_source
+import llm_backends
+import tts_engines
+
 BASE = "/opt/writ-fm"
 AUDIO = os.path.join(BASE, "stub_audio")
 CFG = os.path.join(BASE, "station.json")
@@ -47,32 +58,6 @@ def load_cfg():
 def save_cfg(c):
     with open(CFG, "w") as f:
         json.dump(c, f, indent=2)
-
-
-def kokoro_voices(base):
-    try:
-        with urllib.request.urlopen(base.rstrip("/") + "/v1/audio/voices", timeout=4) as r:
-            d = json.load(r)
-        v = d.get("voices", d) if isinstance(d, dict) else d
-        if not isinstance(v, list):
-            return []
-        # Kokoro-FastAPI returns [{"id":..,"name":..}]; older builds return plain strings.
-        names = [(x.get("id") or x.get("name")) if isinstance(x, dict) else x for x in v]
-        return sorted(n for n in names if n)
-    except Exception:
-        return []
-
-
-def kokoro_speech(base, voice, speed, text, fmt="mp3"):
-    body = json.dumps({
-        "model": "kokoro", "input": text, "voice": voice,
-        "speed": float(speed), "response_format": fmt,
-    }).encode()
-    req = urllib.request.Request(
-        base.rstrip("/") + "/v1/audio/speech", data=body,
-        headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=90) as r:
-        return r.read()
 
 
 def icecast_status():
@@ -153,7 +138,7 @@ audio{width:100%;margin-top:.4rem}
 a{color:#3b82f6}
 </style></head><body>
 <h1>WRIT-FM control</h1>
-<div class="sub">ai-radio &middot; repo stand-up pattern &middot; issue #38</div>
+<div class="sub">ai-radio &middot; repo stand-up pattern &middot; issue #38 &middot; <a href="/blocks">programming blocks</a></div>
 
 <div class="status">
   <span><span id="kdot" class="dot"></span>Kokoro <span id="kstate">?</span></span>
@@ -310,6 +295,65 @@ loadSources();
 </body></html>"""
 
 
+PLAYER_SCRIPT = os.path.join(BASE, "block_player.py")
+PLAYER_PID_FILE = os.path.join(BASE, "block_player.pid")
+
+
+def _api_route(path):
+    """Path segments after '/api/', tolerating a tailscale-serve mount prefix
+    (same reason the existing routes above match via .endswith())."""
+    idx = path.find("/api/")
+    if idx == -1:
+        return None
+    return path[idx + len("/api/"):].strip("/").split("/")
+
+
+def _player_pid():
+    try:
+        with open(PLAYER_PID_FILE) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)
+        return pid
+    except Exception:
+        return None
+
+
+def _spawn_player():
+    subprocess.Popen(["python3", PLAYER_SCRIPT], cwd=BASE,
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                      start_new_session=True)
+
+
+def schedule_block(block_id, mode):
+    block_render.render_block(block_id, force=False)
+    if mode == "now":
+        subprocess.run(["systemctl", "stop", "writ-stream.service"], capture_output=True)
+        block_render.queue_now(block_id)
+        pid = _player_pid()
+        if pid:
+            os.kill(pid, signal.SIGTERM)
+            for _ in range(25):  # wait for the FIFO/pid file to release before respawning
+                if _player_pid() is None:
+                    break
+                time.sleep(0.2)
+        _spawn_player()
+    else:
+        was_idle = _player_pid() is None
+        block_render.queue_append(block_id)
+        if was_idle:
+            subprocess.run(["systemctl", "stop", "writ-stream.service"], capture_output=True)
+            _spawn_player()
+    block_render.mark_scheduled(block_id, "queued")
+    return {"ok": True, "queue": block_render.load_queue()}
+
+
+def stop_block_player():
+    pid = _player_pid()
+    if pid:
+        os.kill(pid, signal.SIGTERM)
+    block_render.save_queue([])
+
+
 class H(BaseHTTPRequestHandler):
     def _send(self, code, ctype, body):
         self.send_response(code)
@@ -351,6 +395,57 @@ class H(BaseHTTPRequestHandler):
         if u.path.endswith("/api/sources"):
             p=subprocess.run(["python3","/opt/writ-fm/jf_source.py","list"],capture_output=True,text=True)
             return self._send(200,"application/json",(p.stdout or '{"sources":[]}').encode())
+        if "/api/" not in u.path and u.path.rstrip("/").endswith("/blocks"):
+            return self._send(200, "text/html; charset=utf-8", blocks_page.BLOCKS_PAGE.encode())
+
+        route = _api_route(u.path)
+        if route is not None:
+            try:
+                if route == ["blocks"]:
+                    return self._send(200, "application/json", json.dumps(block_render.list_blocks()).encode())
+                if route == ["live_sources"]:
+                    return self._send(200, "application/json", json.dumps(live_source.load_sources()).encode())
+                if route == ["live_test"]:
+                    q = parse_qs(u.query)
+                    r = live_source.resolve_live(q.get("source_id", [""])[0])
+                    return self._send(200, "application/json", json.dumps(r).encode())
+                if route == ["music_test"]:
+                    q = parse_qs(u.query)
+                    r = jellyfin_client.resolve_music(q.get("q", [""])[0], limit=20)
+                    return self._send(200, "application/json", json.dumps(r).encode())
+                if route == ["tts_test"]:
+                    q = {k: v[0] for k, v in parse_qs(u.query).items()}
+                    cfg = load_cfg()
+                    text, _title = block_render.build_tts_text(q.get("topic", "weather"), q)
+                    engine = q.get("engine", "kokoro")
+                    voice = q.get("voice") or cfg.get("voice", "am_michael")
+                    speed = q.get("speed") or cfg.get("speed", 1.0)
+                    audio = tts_engines.speech(engine, voice, speed, text, cfg, fmt="mp3")
+                    return self._send(200, "audio/mpeg", audio)
+                if route == ["tts_engines"]:
+                    return self._send(200, "application/json", json.dumps(tts_engines.list_engines(load_cfg())).encode())
+                if route == ["llm_backends"]:
+                    q = parse_qs(u.query)
+                    backend = q.get("backend", [None])[0]
+                    if backend:
+                        return self._send(200, "application/json", json.dumps({"models": llm_backends.list_models(backend)}).encode())
+                    return self._send(200, "application/json", json.dumps(llm_backends.list_backends()).encode())
+                if len(route) == 2 and route[0] == "blocks":
+                    return self._send(200, "application/json", json.dumps(block_render.load_block(route[1])).encode())
+                if len(route) == 3 and route[0] == "blocks" and route[2] == "markdown":
+                    with open(os.path.join(block_render.block_dir(route[1]), "block.md")) as f:
+                        return self._send(200, "text/markdown; charset=utf-8", f.read().encode())
+                if len(route) == 4 and route[0] == "blocks" and route[2] == "audio":
+                    block = block_render.load_block(route[1])
+                    seg = next((s for s in block["segments"] if s["id"] == route[3]), None)
+                    if not seg or "audio_path" not in seg.get("resolved", {}):
+                        return self._send(404, "text/plain", b"not found")
+                    with open(os.path.join(block_render.block_dir(route[1]), seg["resolved"]["audio_path"]), "rb") as f:
+                        return self._send(200, "audio/ogg", f.read())
+            except FileNotFoundError:
+                return self._send(404, "text/plain", b"not found")
+            except Exception as e:
+                return self._send(502, "text/plain", str(e).encode())
         self._send(404, "text/plain", b"not found")
 
     def do_POST(self):
@@ -386,6 +481,38 @@ class H(BaseHTTPRequestHandler):
             n=int(self.headers.get("Content-Length",0)); body=json.loads(self.rfile.read(n) or b"{}")
             p=subprocess.run(["python3","/opt/writ-fm/jf_source.py","set",body.get("source","")],capture_output=True,text=True)
             return self._send(200,"application/json",(p.stdout or '{"ok":false}').encode())
+
+        route = _api_route(u.path)
+        if route is not None:
+            n = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+            try:
+                if route == ["blocks", "stop"]:
+                    stop_block_player()
+                    return self._send(200, "application/json", json.dumps({"ok": True}).encode())
+                if route == ["llm_test"]:
+                    text = llm_backends.generate(body["backend"], body["model"], body["prompt"])
+                    return self._send(200, "application/json", json.dumps({"text": text}).encode())
+                if route == ["blocks"]:
+                    return self._send(200, "application/json", json.dumps(block_render.create_block(body.get("title", ""))).encode())
+                if len(route) == 2 and route[0] == "blocks":
+                    block = block_render.load_block(route[1])
+                    if "title" in body:
+                        block["title"] = body["title"]
+                    if "segments" in body:
+                        block["segments"] = body["segments"]
+                    block_render.save_block(block)
+                    return self._send(200, "application/json", json.dumps(block).encode())
+                if len(route) == 3 and route[0] == "blocks" and route[2] == "render":
+                    result = block_render.render_block(route[1], force=bool(body.get("force")))
+                    return self._send(200, "application/json", json.dumps(result).encode())
+                if len(route) == 3 and route[0] == "blocks" and route[2] == "schedule":
+                    result = schedule_block(route[1], body.get("mode", "queue"))
+                    return self._send(200, "application/json", json.dumps(result).encode())
+            except FileNotFoundError:
+                return self._send(404, "text/plain", b"not found")
+            except Exception as e:
+                return self._send(502, "text/plain", str(e).encode())
         self._send(404, "text/plain", b"not found")
 
 

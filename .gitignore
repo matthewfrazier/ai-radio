@@ -57,3 +57,11 @@ current_source.txt
 station.json
 stub_audio/
 *.bak
+# ai-radio overlay: programming blocks feature
+weather.conf
+anthropic.conf
+live_sources.json
+program_blocks/
+block_queue.json
+block_player.pid
+.block_sink.fifo

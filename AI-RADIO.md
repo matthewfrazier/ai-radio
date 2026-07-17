@@ -5,6 +5,10 @@ dedicated-host deployment overlay on top of the upstream station engine. Pull
 upstream fixes with `git fetch upstream && git merge upstream/main`.
 
 ## What lives here (overlay, not in upstream)
+- `PROGRAM_BLOCKS.md` — in-progress "programming blocks" admin surface
+  (`/blocks`): scheduled hour-long blocks mixing live news, TTS, and Jellyfin
+  music. Read this before touching `block_*.py`, `blocks_page.py`,
+  `live_source.py`, `tts_content.py`, `tts_engines.py`, or `llm_backends.py`.
 - `panel.py` — admin panel (http.server on :8080, exposed at `/admin` via tailscale
   serve). Includes the Jellyfin music-source selector.
 - `jf_source.py` — Jellyfin source engine: auth, `list` (library + playlists),
