@@ -8,9 +8,17 @@
     },
     {
       "id": "bbc_world",
-      "name": "BBC World Service",
-      "url": "https://stream.live.vc.bbcmedia.co.uk/bbc_world_service",
-      "homepage": "https://www.bbc.co.uk/worldserviceradio"
+      "name": "BBC World Service News (5min bulletin)",
+      "kind": "podcast_latest",
+      "feed_url": "https://podcast.voice.api.bbci.co.uk/rss/audio/p002vsmz?api_key=Wbek5zSqxz0Hk1blo5IBqbd9SCWIfNbT",
+      "homepage": "https://www.bbc.co.uk/programmes/p002vsmz"
+    },
+    {
+      "id": "dw_brief",
+      "name": "DW News Brief",
+      "kind": "podcast_latest",
+      "feed_url": "https://rss.dw.com/syndication/feeds/podcast_en_newsbrief.33191-mrss.xml",
+      "homepage": "https://www.dw.com/en/dw-news/program-262267"
     },
     {
       "id": "cnn",

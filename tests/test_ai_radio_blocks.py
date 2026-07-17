@@ -141,13 +141,18 @@ class LiveSourcesTests(unittest.TestCase):
     def test_default_sources_have_unique_ids(self):
         ids = [s["id"] for s in live_source.DEFAULT_SOURCES]
         self.assertEqual(len(ids), len(set(ids)), "duplicate live source ids")
-        self.assertEqual(len(ids), 10)
 
     def test_every_default_source_has_required_fields(self):
+        # two shapes: a plain continuous stream (url), or a periodic-bulletin
+        # podcast feed resolved to its latest episode (feed_url) -- see
+        # resolve_podcast_latest / PROGRAM_BLOCKS.md.
         for src in live_source.DEFAULT_SOURCES:
             self.assertTrue(src["id"])
             self.assertTrue(src["name"])
-            self.assertTrue(src["url"].startswith("http"))
+            if src.get("kind") == "podcast_latest":
+                self.assertTrue(src["feed_url"].startswith("http"))
+            else:
+                self.assertTrue(src["url"].startswith("http"))
 
     def test_get_source_resolves_by_id(self):
         with tempfile.TemporaryDirectory() as d:
@@ -163,6 +168,52 @@ class LiveSourcesTests(unittest.TestCase):
     def test_resolve_live_unknown_id_raises(self):
         with self.assertRaises(ValueError):
             live_source.resolve_live("not-a-real-source")
+
+
+class PodcastLatestTests(unittest.TestCase):
+    """resolve_podcast_latest's XML parsing, tested against a canned feed --
+    never hits the real network in CI."""
+
+    SAMPLE_FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0"><channel>
+      <title>Sample Bulletin</title>
+      <item>
+        <title>17/07/2026 05:01 GMT</title>
+        <enclosure url="https://example.test/bulletin-latest.mp3" type="audio/mpeg" length="123"/>
+      </item>
+      <item>
+        <title>17/07/2026 04:31 GMT</title>
+        <enclosure url="https://example.test/bulletin-older.mp3" type="audio/mpeg" length="123"/>
+      </item>
+    </channel></rss>"""
+
+    def test_resolves_the_first_items_enclosure(self):
+        with patch.object(live_source, "_fetch_bytes", return_value=self.SAMPLE_FEED):
+            url, title = live_source.resolve_podcast_latest("https://example.test/feed.xml")
+        self.assertEqual(url, "https://example.test/bulletin-latest.mp3")
+        self.assertEqual(title, "17/07/2026 05:01 GMT")
+
+    def test_empty_feed_raises(self):
+        empty = b'<?xml version="1.0"?><rss version="2.0"><channel></channel></rss>'
+        with patch.object(live_source, "_fetch_bytes", return_value=empty):
+            with self.assertRaises(RuntimeError):
+                live_source.resolve_podcast_latest("https://example.test/feed.xml")
+
+    def test_item_without_enclosure_raises(self):
+        no_enclosure = b"""<?xml version="1.0"?><rss version="2.0"><channel>
+        <item><title>oops</title></item></channel></rss>"""
+        with patch.object(live_source, "_fetch_bytes", return_value=no_enclosure):
+            with self.assertRaises(RuntimeError):
+                live_source.resolve_podcast_latest("https://example.test/feed.xml")
+
+    def test_resolve_live_dispatches_podcast_latest_sources_by_kind(self):
+        fake_source = {"id": "brief", "name": "Brief", "kind": "podcast_latest",
+                       "feed_url": "https://example.test/feed.xml"}
+        with patch.object(live_source, "get_source", return_value=fake_source), \
+             patch.object(live_source, "_fetch_bytes", return_value=self.SAMPLE_FEED):
+            r = live_source.resolve_live("brief")
+        self.assertEqual(r["url"], "https://example.test/bulletin-latest.mp3")
+        self.assertEqual(r["title"], "17/07/2026 05:01 GMT")
 
 
 class WeatherScriptTests(unittest.TestCase):

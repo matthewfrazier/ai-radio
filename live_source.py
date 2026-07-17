@@ -15,6 +15,8 @@ import socket
 import ssl
 import time
 import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
 
 LIVE_CFG = "/opt/writ-fm/live_sources.json"
 LIVE_CFG_EXAMPLE = "/opt/writ-fm/live_sources.json.example"
@@ -24,7 +26,17 @@ DEFAULT_SOURCES = [
     # (whatever's currently airing), NOT the newscast -- pd.npr.org's
     # newscast.mp3 is the actual ~5min hourly bulletin (verified 280s).
     {"id": "npr", "name": "NPR Newscast", "url": "http://pd.npr.org/anon.npr-mp3/npr/news/newscast.mp3", "homepage": "https://www.npr.org/podcasts/500005/npr-news-now"},
-    {"id": "bbc_world", "name": "BBC World Service", "url": "https://stream.live.vc.bbcmedia.co.uk/bbc_world_service", "homepage": "https://www.bbc.co.uk/worldserviceradio"},
+    # bbc_world used to be the full 24/7 World Service live stream (not a
+    # brief, despite the name) -- now resolves to the latest episode of
+    # BBC's actual "5 minute news bulletin" podcast feed instead (verified
+    # 300s via ffprobe). kind/feed_url kept id-compatible with any saved
+    # block that already references source_id "bbc_world".
+    {"id": "bbc_world", "name": "BBC World Service News (5min bulletin)", "kind": "podcast_latest",
+     "feed_url": "https://podcast.voice.api.bbci.co.uk/rss/audio/p002vsmz?api_key=Wbek5zSqxz0Hk1blo5IBqbd9SCWIfNbT",
+     "homepage": "https://www.bbc.co.uk/programmes/p002vsmz"},
+    {"id": "dw_brief", "name": "DW News Brief", "kind": "podcast_latest",
+     "feed_url": "https://rss.dw.com/syndication/feeds/podcast_en_newsbrief.33191-mrss.xml",
+     "homepage": "https://www.dw.com/en/dw-news/program-262267"},
     {"id": "cnn", "name": "CNN", "url": "https://tunein.cdnstream1.com/2868_96.mp3", "homepage": "https://www.cnn.com/audio"},
     {"id": "fox_news_radio", "name": "Fox News Radio", "url": "https://live.amperwave.net/direct/foxnewsradio-foxnewsradioaac-imc?source=fnr.web", "homepage": "https://www.foxnewsradio.com/"},
     {"id": "msnbc", "name": "MSNBC", "url": "https://tunein.cdnstream1.com/3511_96.mp3", "homepage": "https://www.msnbc.com/"},
@@ -116,10 +128,40 @@ def probe_icy_title(url, timeout=5.0):
             pass
 
 
+def _fetch_bytes(url, timeout=10.0):
+    req = urllib.request.Request(url, headers={"User-Agent": "ai-radio-station/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def resolve_podcast_latest(feed_url):
+    """Fetch a podcast RSS feed and return (url, title) for its most recent
+    episode's <enclosure>. For sources that publish periodic short bulletins
+    (BBC's 5min world news, DW's ~90s news brief) rather than run a
+    continuous live stream -- the whole point is that the URL genuinely
+    changes per episode, so this is never cached, same as the rest of
+    live/music resolution (cheap call, no reason to)."""
+    root = ET.fromstring(_fetch_bytes(feed_url))
+    item = root.find("./channel/item")
+    if item is None:
+        raise RuntimeError("podcast feed has no items: %s" % feed_url)
+    enclosure = item.find("enclosure")
+    url = enclosure.get("url") if enclosure is not None else None
+    if not url:
+        raise RuntimeError("podcast feed item has no enclosure: %s" % feed_url)
+    title = (item.findtext("title") or "").strip()
+    return url, title
+
+
 def resolve_live(source_id):
     src = get_source(source_id)
     if not src:
         raise ValueError("unknown live source: %s" % source_id)
+
+    if src.get("kind") == "podcast_latest":
+        url, episode_title = resolve_podcast_latest(src["feed_url"])
+        return {"id": src["id"], "name": src["name"], "url": url,
+                "title": episode_title or src["name"], "homepage": src.get("homepage", "")}
 
     cached = _title_cache.get(source_id)
     if cached and time.time() - cached[1] < _CACHE_TTL_S:

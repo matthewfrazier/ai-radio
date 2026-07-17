@@ -158,6 +158,42 @@ per-segment `voice` override, it just had no UI. Verified end-to-end: picked
 Weather TTS now confirmed fully working — `OWM_API_KEY`'s earlier `401` was
 indeed just OpenWeatherMap's new-key activation delay; it's since resolved.
 
+Follow-up round after user testing found the URL fix alone hadn't visibly
+taken effect:
+- **Root cause**: `render_block()` only re-resolved `live`/`music` segments
+  when `status != "ok"`, contradicting the original design intent ("always
+  re-resolved on demand, no TTL, cheap calls"). Any already-resolved segment
+  kept its cached URL forever, surviving config fixes indefinitely. Now
+  `live`/`music` always re-resolve; `tts` is still the only type gated by
+  staleness/TTL (verified by injecting a stale cached npr segment and
+  confirming `render(force=False)` corrects it).
+- `blocks_page.py`'s preview-track label used `.textContent` with an HTML
+  entity (`&middot;`), which only parses inside `.innerHTML` — rendered as
+  literal `&middot;` text. Switched to the actual `·` character.
+- Segment status was a static text label reflecting only the last full save.
+  Replaced with a `.dot` indicator (the ok/bad convention already in the CSS
+  but never used) that updates live on Test success/failure and resets to
+  neutral the instant a param is edited.
+- Whole-block preview only queued one track per music segment regardless of
+  `duration_s` — a 900s segment stopped after one ~3min song. Now queues up
+  to 10 distinct tracks so Next/auto-advance actually cycles through them.
+- **BBC wasn't actually a brief either** (unlike npr, whose URL was simply
+  wrong — bbc_world's URL was honestly the full live World Service stream,
+  which just isn't a bulletin). Added `kind: "podcast_latest"` as a second
+  live-source resolution mode: fetches a podcast RSS feed and resolves to
+  its most-recent `<enclosure>` — a genuinely different URL per episode,
+  same "always re-resolve, never cache" treatment as everything else.
+  `bbc_world` (id kept for compatibility with any block already referencing
+  it) now resolves to BBC's real "5 minute news bulletin" podcast feed
+  (verified 300s via ffprobe); added `dw_brief` (Deutsche Welle's "DW News
+  Brief," verified ~90s) as a second genuine bulletin via the same
+  mechanism. `resolve_podcast_latest()` is generic — more feeds can be added
+  by config alone, no new code. 11 sources total now; only npr/bbc_world/
+  dw_brief are genuine bulletins, the other 8 are honest full-live-channel
+  relays (CNN, Fox News Radio, MSNBC, NBC News Radio, Bloomberg Radio,
+  Deutschlandfunk, RFI Monde, NPO Radio 1) — no dedicated bulletin feed was
+  found for those in this pass.
+
 Not yet done:
 - Staleness re-render test (needs a working `tts` segment — now unblocked
   now that weather works, just hasn't been run).
