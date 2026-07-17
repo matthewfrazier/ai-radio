@@ -128,12 +128,19 @@ class Sink:
         self.fd = fd
 
     def write(self, chunk):
-        try:
-            os.write(self.fd, chunk)
-        except OSError:
-            if self.proc.poll() is not None:
-                self.respawn()  # sink died -- drop this chunk, resume on the next one
-            else:
+        # os.write on a pipe can write fewer bytes than requested (only <=
+        # PIPE_BUF is atomic; we push 64KB), so loop until the whole chunk is
+        # consumed -- a dropped remainder truncates raw PCM mid-frame and
+        # desyncs the channels for the rest of the segment.
+        mv = memoryview(chunk)
+        while mv:
+            try:
+                n = os.write(self.fd, mv)
+                mv = mv[n:]
+            except OSError:
+                if self.proc.poll() is not None:
+                    self.respawn()  # sink died -- drop the rest of this chunk, resume next
+                    return
                 raise
 
     def close(self):

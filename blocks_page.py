@@ -112,6 +112,26 @@ const $=id=>document.getElementById(id);
 const BASE=location.pathname.replace(/\/+$/,'');
 let block=null, liveSources=[], llmBackends=[], ttsEngines=[], previewQueue=[], previewIdx=0;
 
+// Escape before interpolating any operator/Jellyfin-sourced text into
+// innerHTML (block titles, queries, prompts, track names) -- otherwise a
+// value like `"><script>` breaks out of the attribute/element. Persistent,
+// since this data round-trips through block.json / the Jellyfin library.
+function esc(s){
+  return String(s==null?'':s).replace(/[&<>"']/g,
+    c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Single persist path: acting on a block (preview, schedule) saves the
+// on-screen edits first, so what airs is what the operator sees -- not the
+// last-saved server copy.
+async function persistBlock(signal){
+  block.title=$('title').value;
+  const resp=await fetch(BASE+'/api/blocks/'+block.id,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({title:block.title,segments:block.segments}),signal});
+  if(!resp.ok) throw new Error((await resp.text())||('HTTP '+resp.status));
+  block=await resp.json();
+}
+
 // Every long-running action ticks its status message with elapsed seconds
 // (a stuck request looks identical to a slow one otherwise) and aborts with
 // a visible "timed out" after timeoutMs rather than hanging silently.
@@ -146,7 +166,7 @@ async function loadBlockList(){
   const el=$('blockList'); el.innerHTML='';
   list.forEach(b=>{
     const d=document.createElement('div');
-    d.innerHTML=`<span>${b.title} &middot; ${b.segment_count} segments &middot; ${b.schedule.state}</span><span class="sub">${b.id}</span>`;
+    d.innerHTML=`<span>${esc(b.title)} &middot; ${b.segment_count} segments &middot; ${esc(b.schedule.state)}</span><span class="sub">${esc(b.id)}</span>`;
     d.onclick=()=>openBlock(b.id);
     el.appendChild(d);
   });
@@ -173,19 +193,19 @@ function renderSegments(){
 function segForm(seg,i){
   let body='';
   if(seg.type==='live'){
-    const opts=liveSources.map(s=>`<option value="${s.id}" ${s.id===seg.params.source_id?'selected':''}>${s.name}</option>`).join('');
+    const opts=liveSources.map(s=>`<option value="${esc(s.id)}" ${s.id===seg.params.source_id?'selected':''}>${esc(s.name)}</option>`).join('');
     body=`<label>Source</label><select data-f="source_id">${opts}</select>
       <label>Duration (s)</label><input type="number" data-f="duration_s" value="${seg.params.duration_s||300}">`;
   } else if(seg.type==='music'){
-    body=`<label>Playlist name / search term (blank = shuffle all)</label><input data-f="query" value="${seg.params.query||''}">
+    body=`<label>Playlist name / search term (blank = shuffle all)</label><input data-f="query" value="${esc(seg.params.query||'')}">
       <label>Duration (s)</label><input type="number" data-f="duration_s" value="${seg.params.duration_s||900}">`;
   } else if(seg.type==='tts'){
     const isWeather=(seg.params.topic||'weather')==='weather';
     body=`<label>Topic</label><select data-f="topic"><option value="weather" ${isWeather?'selected':''}>weather</option><option value="freeform" ${!isWeather?'selected':''}>freeform</option></select>
       <label>Voice</label><select data-f="voice" class="voiceSelect"></select>
-      <div class="wxOnly" ${!isWeather?'hidden':''}><label>Location (zip or city)</label><input data-f="location" value="${seg.params.location||''}"></div>
+      <div class="wxOnly" ${!isWeather?'hidden':''}><label>Location (zip or city)</label><input data-f="location" value="${esc(seg.params.location||'')}"></div>
       <div class="ffOnly" ${isWeather?'hidden':''}>
-        <label>Prompt</label><textarea data-f="prompt">${seg.params.prompt||''}</textarea>
+        <label>Prompt</label><textarea data-f="prompt">${esc(seg.params.prompt||'')}</textarea>
         <div class="row">
           <div><label>LLM backend</label><select data-f="llm_backend" class="llmBackend"></select></div>
           <div><label>Model</label><select data-f="llm_model" class="llmModel"></select></div>
@@ -195,7 +215,7 @@ function segForm(seg,i){
   }
   const dotClass = seg.status==='ok' ? 'ok' : (seg.status==='error' ? 'bad' : '');
   return `<div class="hd">
-      <span class="left"><span class="dot ${dotClass}" data-role="statusdot" title="${seg.status||'unresolved'}"></span><span class="badge">${seg.type}</span><span class="name">${segTitle(seg)}</span></span>
+      <span class="left"><span class="dot ${dotClass}" data-role="statusdot" title="${esc(seg.status||'unresolved')}"></span><span class="badge">${esc(seg.type)}</span><span class="name">${esc(segTitle(seg))}</span></span>
       <span class="move"><button class="ghost" data-act="up">&uarr;</button><button class="ghost" data-act="down">&darr;</button><button class="danger kill" data-act="remove">&times;</button></span></div>
     ${body}
     <div class="actions"><button class="ghost" data-act="test">Test</button><span class="testmsg" data-role="testmsg"></span></div>
@@ -284,7 +304,7 @@ async function testSegment(seg,el){
       const tl=el.querySelector('.tracklist'); tl.innerHTML='';
       r.tracks.slice(0,30).forEach(t=>{
         const d=document.createElement('div');
-        d.innerHTML=`<span>${t.name}</span><button class="ghost" type="button">play</button>`;
+        d.innerHTML=`<span>${esc(t.name)}</span><button class="ghost" type="button">play</button>`;
         d.querySelector('button').onclick=()=>{shared.src=t.url; shared.play();};
         tl.appendChild(d);
       });
@@ -335,12 +355,8 @@ document.querySelectorAll('[data-add]').forEach(btn=>{
 $('btnSave').onclick=async()=>{
   const tick=tickerFor($('saveMsg'), 20000);
   tick.set('saving...');
-  block.title=$('title').value;
   try{
-    const resp=await fetch(BASE+'/api/blocks/'+block.id,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({title:block.title,segments:block.segments}),signal:tick.signal});
-    if(!resp.ok) throw new Error((await resp.text())||('HTTP '+resp.status));
-    block=await resp.json();
+    await persistBlock(tick.signal);
     tick.done('saved');
     await loadBlockList();
   }catch(e){ tick.fail(e); }
@@ -368,8 +384,10 @@ $('btnDelete').onclick=async()=>{
 
 $('btnBuildPreview').onclick=async()=>{
   const tick=tickerFor($('previewMsg'), 90000);
-  tick.set('rendering (only stale/missing assets)...');
+  tick.set('saving...');
   try{
+    await persistBlock(tick.signal);  // preview what's on screen, not the last-saved copy
+    tick.set('rendering (only stale/missing assets)...');
     const resp=await fetch(BASE+'/api/blocks/'+block.id+'/render',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"force":false}',signal:tick.signal});
     if(!resp.ok) throw new Error((await resp.text())||('HTTP '+resp.status));
     block=await (await fetch(BASE+'/api/blocks/'+block.id)).json();
@@ -380,14 +398,13 @@ $('btnBuildPreview').onclick=async()=>{
       const r=seg.resolved||{};
       if(seg.type==='tts'&&r.audio_path) previewQueue.push({label:'tts: '+(r.title||''), url:BASE+'/api/blocks/'+block.id+'/audio/'+seg.id});
       else if(seg.type==='live'&&r.url) previewQueue.push({label:'live: '+(r.title||''), url:r.url});
-      else if(seg.type==='music'){
+      else if(seg.type==='music'&&r.playlist_path){
         try{
-          const m=await (await fetch(BASE+'/api/music_test?q='+encodeURIComponent(seg.params.query||''))).json();
-          // preview several tracks, not just one -- a single track stopping
-          // after ~3min looked like a bug against a segment configured for
-          // 900s. Capped at 10 (a preview auditions the segment, it doesn't
-          // need to fill the full configured air-time).
-          (m.tracks||[]).slice(0,10).forEach(t=>previewQueue.push({label:'music: '+m.title+' — '+t.name, url:t.url}));
+          // Preview the ACTUAL rendered playlist (the URLs that will air),
+          // not a fresh random music_test roll -- otherwise the preview and
+          // the broadcast share little overlap. Capped at 10 for stepping.
+          const tr=await (await fetch(BASE+'/api/blocks/'+block.id+'/tracks/'+seg.id)).json();
+          (tr.urls||[]).slice(0,10).forEach((u,i)=>previewQueue.push({label:'music: '+(r.title||'')+' ['+(i+1)+']', url:u}));
         }catch(e){}
       }
     }
@@ -406,15 +423,20 @@ $('previewAudio').onended=()=>{ if(previewIdx<previewQueue.length-1){ previewIdx
 $('btnPrev').onclick=()=>{ if(previewIdx>0){ previewIdx--; playPreview(); } };
 $('btnNext').onclick=()=>{ if(previewIdx<previewQueue.length-1){ previewIdx++; playPreview(); } };
 
+const schedBtns=['btnPlayNow','btnQueue','btnStop'];
 async function schedule(mode){
   const tick=tickerFor($('schedMsg'), 90000);
-  tick.set('working...');
+  schedBtns.forEach(b=>$(b).disabled=true);  // no double-click double-spawn
+  tick.set('saving...');
   try{
+    await persistBlock(tick.signal);  // air what's on screen, not the last-saved copy
+    tick.set('working...');
     const resp=await fetch(BASE+'/api/blocks/'+block.id+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({mode}),signal:tick.signal});
     const r=await resp.json();
     tick.done(r.ok?('queue: '+JSON.stringify(r.queue)):('error: '+r.error));
   }catch(e){ tick.fail(e); }
+  finally{ schedBtns.forEach(b=>$(b).disabled=false); }
 }
 $('btnPlayNow').onclick=()=>schedule('now');
 $('btnQueue').onclick=()=>schedule('queue');

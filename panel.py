@@ -7,6 +7,7 @@ through Kokoro and restarts the Icecast stream. Zero deps (stdlib only)."""
 import glob
 import json
 import os
+import re
 import subprocess
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -443,6 +444,21 @@ class H(BaseHTTPRequestHandler):
                         return self._send(404, "text/plain", b"not found")
                     with open(os.path.join(block_render.block_dir(route[1]), seg["resolved"]["audio_path"]), "rb") as f:
                         return self._send(200, "audio/ogg", f.read())
+                if len(route) == 4 and route[0] == "blocks" and route[2] == "tracks":
+                    # The URLs actually rendered into this music segment's
+                    # playlist (what will air), so the whole-block preview
+                    # auditions the real tracks, not a fresh random roll.
+                    block = block_render.load_block(route[1])
+                    seg = next((s for s in block["segments"] if s["id"] == route[3]), None)
+                    if not seg or "playlist_path" not in seg.get("resolved", {}):
+                        return self._send(404, "text/plain", b"not found")
+                    urls = []
+                    with open(os.path.join(block_render.block_dir(route[1]), seg["resolved"]["playlist_path"])) as f:
+                        for line in f:
+                            m = re.match(r"file '(.*)'\s*$", line.strip())
+                            if m:
+                                urls.append(m.group(1))
+                    return self._send(200, "application/json", json.dumps({"urls": urls}).encode())
             except FileNotFoundError:
                 return self._send(404, "text/plain", b"not found")
             except Exception as e:
