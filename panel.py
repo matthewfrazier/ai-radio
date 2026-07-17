@@ -354,6 +354,18 @@ def stop_block_player():
     block_render.save_queue([])
 
 
+def delete_block_safe(block_id):
+    queue = block_render.load_queue()
+    if queue and queue[0] == block_id:
+        # currently airing (or about to) -- the player has this block's dir
+        # open mid-segment, so it must stop before the files disappear
+        # underneath it, not just get its queue entry dropped.
+        stop_block_player()
+    elif block_id in queue:
+        block_render.save_queue([b for b in queue if b != block_id])
+    block_render.delete_block(block_id)
+
+
 class H(BaseHTTPRequestHandler):
     def _send(self, code, ctype, body):
         self.send_response(code)
@@ -478,7 +490,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, "application/json", json.dumps(
                     {"ok": False, "error": str(e), "log": ""}).encode())
         if u.path.endswith("/api/source"):
-            n=int(self.headers.get("Content-Length",0)); body=json.loads(self.rfile.read(n) or b"{}")
+            n=int(self.headers.get("Content-Length",0))
+            body=json.loads(self.rfile.read(n) or b"{}")
             p=subprocess.run(["python3","/opt/writ-fm/jf_source.py","set",body.get("source","")],capture_output=True,text=True)
             return self._send(200,"application/json",(p.stdout or '{"ok":false}').encode())
 
@@ -511,6 +524,16 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, "application/json", json.dumps(result).encode())
             except FileNotFoundError:
                 return self._send(404, "text/plain", b"not found")
+            except Exception as e:
+                return self._send(502, "text/plain", str(e).encode())
+        self._send(404, "text/plain", b"not found")
+
+    def do_DELETE(self):
+        route = _api_route(urlparse(self.path).path)
+        if route is not None and len(route) == 2 and route[0] == "blocks":
+            try:
+                delete_block_safe(route[1])
+                return self._send(200, "application/json", json.dumps({"ok": True}).encode())
             except Exception as e:
                 return self._send(502, "text/plain", str(e).encode())
         self._send(404, "text/plain", b"not found")

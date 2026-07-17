@@ -13,6 +13,9 @@ h2{font-size:.9rem;margin:0;text-transform:uppercase;letter-spacing:.02em;opacit
 .sub{opacity:.7;font-size:.85rem;margin-bottom:1rem}
 section{margin:0 0 1.4rem}
 section>.hd2{border-bottom:1px solid #8883;padding-bottom:.4rem;margin-bottom:.6rem}
+#editor{border:1px solid #3b82f666;border-radius:16px;padding:1rem;background:#3b82f60d}
+#editor section{margin-bottom:1.2rem}
+#editor section:last-child{margin-bottom:0}
 label{display:block;font-size:.78rem;opacity:.75;margin:.55rem 0 .2rem}
 input,select,textarea{width:100%;box-sizing:border-box;font:inherit;padding:.5rem .6rem;border:1px solid #8885;border-radius:10px;background:transparent;color:inherit}
 textarea{min-height:4rem;resize:vertical}
@@ -69,6 +72,7 @@ a{color:#3b82f6}
   </div>
   <div class="actions">
     <button id="btnSave" type="button">Save block</button>
+    <button class="danger" id="btnDelete" type="button">Delete block</button>
     <span id="saveMsg" class="sub"></span>
   </div>
 </section>
@@ -106,7 +110,29 @@ a{color:#3b82f6}
 <script>
 const $=id=>document.getElementById(id);
 const BASE=location.pathname.replace(/\/+$/,'');
-let block=null, liveSources=[], llmBackends=[], previewQueue=[], previewIdx=0;
+let block=null, liveSources=[], llmBackends=[], ttsEngines=[], previewQueue=[], previewIdx=0;
+
+// Every long-running action ticks its status message with elapsed seconds
+// (a stuck request looks identical to a slow one otherwise) and aborts with
+// a visible "timed out" after timeoutMs rather than hanging silently.
+function tickerFor(el, timeoutMs){
+  const t0=Date.now();
+  let label='';
+  const paint=()=>{ el.textContent=label+' ('+Math.round((Date.now()-t0)/1000)+'s)'; };
+  const id=setInterval(paint,1000);
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),timeoutMs);
+  return {
+    signal:controller.signal,
+    set(l){ label=l; paint(); },
+    done(finalText){ clearInterval(id); clearTimeout(timer); el.textContent=finalText; },
+    fail(e){
+      clearInterval(id); clearTimeout(timer);
+      const s=Math.round((Date.now()-t0)/1000);
+      el.textContent = e.name==='AbortError' ? ('timed out after '+s+'s') : ('error: '+(e.message||e)+' (after '+s+'s)');
+    },
+  };
+}
 
 function segTitle(seg){
   if(seg.type==='live') return seg.params.source_id||'(pick source)';
@@ -156,6 +182,7 @@ function segForm(seg,i){
   } else if(seg.type==='tts'){
     const isWeather=(seg.params.topic||'weather')==='weather';
     body=`<label>Topic</label><select data-f="topic"><option value="weather" ${isWeather?'selected':''}>weather</option><option value="freeform" ${!isWeather?'selected':''}>freeform</option></select>
+      <label>Voice</label><select data-f="voice" class="voiceSelect"></select>
       <div class="wxOnly" ${!isWeather?'hidden':''}><label>Location (zip or city)</label><input data-f="location" value="${seg.params.location||''}"></div>
       <div class="ffOnly" ${isWeather?'hidden':''}>
         <label>Prompt</label><textarea data-f="prompt">${seg.params.prompt||''}</textarea>
@@ -184,7 +211,16 @@ function wireSegHandlers(){
       btn.onclick=()=>segAction(i,btn.dataset.act,el);
     });
     if(el.querySelector('.llmBackend')) loadLlmPickers(el, block.segments[i]);
+    if(el.querySelector('.voiceSelect')) loadVoicePicker(el, block.segments[i]);
   });
+}
+
+async function loadVoicePicker(el,seg){
+  if(!ttsEngines.length) ttsEngines=await (await fetch(BASE+'/api/tts_engines')).json();
+  const vsel=el.querySelector('.voiceSelect');
+  const voices=(ttsEngines.find(e=>e.id==='kokoro')||{}).voices||[];
+  vsel.innerHTML='<option value="">(station default)</option>'
+    +voices.map(v=>`<option value="${v}" ${v===seg.params.voice?'selected':''}>${v}</option>`).join('');
 }
 
 async function loadLlmPickers(el,seg){
@@ -216,22 +252,20 @@ async function testSegment(seg,el){
   const btn=el.querySelector('[data-act=test]');
   const shared=$('shared');
   const isTts=seg.type==='tts';
-  const timeoutMs=isTts?90000:20000;
-  const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(),timeoutMs);
+  const tick=tickerFor(msg, isTts?90000:20000);
   btn.disabled=true;
   try{
     if(seg.type==='live'){
-      msg.textContent='resolving stream...';
-      const r=await (await fetch(BASE+'/api/live_test?source_id='+encodeURIComponent(seg.params.source_id),{signal:controller.signal})).json();
+      tick.set('resolving stream...');
+      const r=await (await fetch(BASE+'/api/live_test?source_id='+encodeURIComponent(seg.params.source_id),{signal:tick.signal})).json();
       if(r.error) throw new Error(r.error);
       shared.src=r.url; shared.play();
-      msg.textContent='playing: '+r.title;
+      tick.done('playing: '+r.title);
     } else if(seg.type==='music'){
-      msg.textContent='resolving tracks...';
-      const r=await (await fetch(BASE+'/api/music_test?q='+encodeURIComponent(seg.params.query||''),{signal:controller.signal})).json();
+      tick.set('resolving tracks...');
+      const r=await (await fetch(BASE+'/api/music_test?q='+encodeURIComponent(seg.params.query||''),{signal:tick.signal})).json();
       if(r.error) throw new Error(r.error);
-      msg.textContent=r.track_count+' tracks ('+r.title+')';
+      tick.done(r.track_count+' tracks ('+r.title+')');
       const tl=el.querySelector('.tracklist'); tl.innerHTML='';
       r.tracks.slice(0,30).forEach(t=>{
         const d=document.createElement('div');
@@ -241,23 +275,23 @@ async function testSegment(seg,el){
       });
     } else if(seg.type==='tts'){
       const isFreeform=(seg.params.topic||'weather')==='freeform';
-      msg.textContent=isFreeform?('generating via '+(seg.params.llm_backend||'llm')+'...'):'fetching weather...';
+      tick.set(isFreeform?('generating via '+(seg.params.llm_backend||'llm')+'...'):'fetching weather...');
       const q=new URLSearchParams({topic:seg.params.topic||'weather'});
       if(seg.params.location) q.set('location',seg.params.location);
       if(seg.params.prompt) q.set('prompt',seg.params.prompt);
       if(seg.params.llm_backend) q.set('llm_backend',seg.params.llm_backend);
       if(seg.params.llm_model) q.set('llm_model',seg.params.llm_model);
-      const resp=await fetch(BASE+'/api/tts_test?'+q.toString(),{signal:controller.signal});
+      if(seg.params.voice) q.set('voice',seg.params.voice);
+      const resp=await fetch(BASE+'/api/tts_test?'+q.toString(),{signal:tick.signal});
       if(!resp.ok){ throw new Error((await resp.text())||('HTTP '+resp.status)); }
-      msg.textContent='rendering audio...';
+      tick.set('rendering audio...');
       const blob=await resp.blob();
       shared.src=URL.createObjectURL(blob); shared.play();
-      msg.textContent='playing';
+      tick.done('playing');
     }
   }catch(e){
-    msg.textContent = e.name==='AbortError' ? ('timed out after '+Math.round(timeoutMs/1000)+'s') : ('error: '+e.message);
+    tick.fail(e);
   }finally{
-    clearTimeout(timer);
     btn.disabled=false;
   }
 }
@@ -282,33 +316,64 @@ document.querySelectorAll('[data-add]').forEach(btn=>{
 });
 
 $('btnSave').onclick=async()=>{
-  $('saveMsg').textContent='saving...';
+  const tick=tickerFor($('saveMsg'), 20000);
+  tick.set('saving...');
   block.title=$('title').value;
-  const r=await (await fetch(BASE+'/api/blocks/'+block.id,{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({title:block.title,segments:block.segments})})).json();
-  block=r; $('saveMsg').textContent='saved'; await loadBlockList();
+  try{
+    const resp=await fetch(BASE+'/api/blocks/'+block.id,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({title:block.title,segments:block.segments}),signal:tick.signal});
+    if(!resp.ok) throw new Error((await resp.text())||('HTTP '+resp.status));
+    block=await resp.json();
+    tick.done('saved');
+    await loadBlockList();
+  }catch(e){ tick.fail(e); }
+};
+
+function stopAllPlayback(){
+  [$('shared'),$('previewAudio')].forEach(a=>{ a.pause(); a.removeAttribute('src'); a.load(); });
+  previewQueue=[]; previewIdx=0; $('previewMsg').textContent='';
+}
+
+$('btnDelete').onclick=async()=>{
+  if(!confirm('Delete "'+block.title+'"? This cannot be undone.')) return;
+  const tick=tickerFor($('saveMsg'), 20000);
+  tick.set('deleting...');
+  try{
+    const resp=await fetch(BASE+'/api/blocks/'+block.id,{method:'DELETE',signal:tick.signal});
+    if(!resp.ok) throw new Error((await resp.text())||('HTTP '+resp.status));
+    tick.done('deleted');
+    stopAllPlayback();
+    $('editor').hidden=true;
+    block=null;
+    await loadBlockList();
+  }catch(e){ tick.fail(e); }
 };
 
 $('btnBuildPreview').onclick=async()=>{
-  $('previewMsg').textContent='rendering (only stale/missing assets)...';
-  await fetch(BASE+'/api/blocks/'+block.id+'/render',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"force":false}'});
-  block=await (await fetch(BASE+'/api/blocks/'+block.id)).json();
-  renderSegments();
-  previewQueue=[];
-  for(const seg of block.segments){
-    const r=seg.resolved||{};
-    if(seg.type==='tts'&&r.audio_path) previewQueue.push({label:'tts: '+(r.title||''), url:BASE+'/api/blocks/'+block.id+'/audio/'+seg.id});
-    else if(seg.type==='live'&&r.url) previewQueue.push({label:'live: '+(r.title||''), url:r.url});
-    else if(seg.type==='music'){
-      try{
-        const m=await (await fetch(BASE+'/api/music_test?q='+encodeURIComponent(seg.params.query||''))).json();
-        if(m.tracks&&m.tracks[0]) previewQueue.push({label:'music: '+m.title, url:m.tracks[0].url});
-      }catch(e){}
+  const tick=tickerFor($('previewMsg'), 90000);
+  tick.set('rendering (only stale/missing assets)...');
+  try{
+    const resp=await fetch(BASE+'/api/blocks/'+block.id+'/render',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"force":false}',signal:tick.signal});
+    if(!resp.ok) throw new Error((await resp.text())||('HTTP '+resp.status));
+    block=await (await fetch(BASE+'/api/blocks/'+block.id)).json();
+    renderSegments();
+    tick.set('resolving preview tracks...');
+    previewQueue=[];
+    for(const seg of block.segments){
+      const r=seg.resolved||{};
+      if(seg.type==='tts'&&r.audio_path) previewQueue.push({label:'tts: '+(r.title||''), url:BASE+'/api/blocks/'+block.id+'/audio/'+seg.id});
+      else if(seg.type==='live'&&r.url) previewQueue.push({label:'live: '+(r.title||''), url:r.url});
+      else if(seg.type==='music'){
+        try{
+          const m=await (await fetch(BASE+'/api/music_test?q='+encodeURIComponent(seg.params.query||''))).json();
+          if(m.tracks&&m.tracks[0]) previewQueue.push({label:'music: '+m.title, url:m.tracks[0].url});
+        }catch(e){}
+      }
     }
-  }
-  previewIdx=0;
-  $('previewMsg').textContent=previewQueue.length+' segments ready';
-  playPreview();
+    previewIdx=0;
+    tick.done(previewQueue.length+' segments ready');
+    playPreview();
+  }catch(e){ tick.fail(e); }
 };
 function playPreview(){
   if(!previewQueue.length) return;
@@ -321,19 +386,25 @@ $('btnPrev').onclick=()=>{ if(previewIdx>0){ previewIdx--; playPreview(); } };
 $('btnNext').onclick=()=>{ if(previewIdx<previewQueue.length-1){ previewIdx++; playPreview(); } };
 
 async function schedule(mode){
-  $('schedMsg').textContent='working...';
+  const tick=tickerFor($('schedMsg'), 90000);
+  tick.set('working...');
   try{
-    const r=await (await fetch(BASE+'/api/blocks/'+block.id+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({mode})})).json();
-    $('schedMsg').textContent=r.ok?('queue: '+JSON.stringify(r.queue)):('error: '+r.error);
-  }catch(e){ $('schedMsg').textContent='error: '+e; }
+    const resp=await fetch(BASE+'/api/blocks/'+block.id+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({mode}),signal:tick.signal});
+    const r=await resp.json();
+    tick.done(r.ok?('queue: '+JSON.stringify(r.queue)):('error: '+r.error));
+  }catch(e){ tick.fail(e); }
 }
 $('btnPlayNow').onclick=()=>schedule('now');
 $('btnQueue').onclick=()=>schedule('queue');
 $('btnStop').onclick=async()=>{
-  $('schedMsg').textContent='stopping...';
-  await fetch(BASE+'/api/blocks/stop',{method:'POST'});
-  $('schedMsg').textContent='stopped, static loop resumed';
+  const tick=tickerFor($('schedMsg'), 20000);
+  tick.set('stopping...');
+  try{
+    const resp=await fetch(BASE+'/api/blocks/stop',{method:'POST',signal:tick.signal});
+    if(!resp.ok) throw new Error((await resp.text())||('HTTP '+resp.status));
+    tick.done('stopped, static loop resumed');
+  }catch(e){ tick.fail(e); }
 };
 
 $('btnMd').onclick=async()=>{

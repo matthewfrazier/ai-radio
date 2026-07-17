@@ -138,13 +138,29 @@ reported the UI wasn't responding. Fixed to match `panel.py`'s pattern; a
 full browser pass afterward (create block, add live+music segments, test
 both, save) showed zero console/page errors.
 
+Also fixed: the `npr` live source pointed at NPR's full 24/7 program stream
+(`npr-ice.streamguys1.com/live.mp3`, whatever's currently airing), not the
+actual newscast, despite being labeled "NPR Newscast." Replaced with
+`pd.npr.org/anon.npr-mp3/npr/news/newscast.mp3` (verified via ffprobe: 280s,
+matching NPR's real ~5min hourly bulletin) and expanded `live_sources.json`/
+`live_sources.json.example` from 2 to 10 sources (NPR Newscast, BBC World
+Service, CNN, Fox News Radio, MSNBC, NBC News Radio, Bloomberg Radio,
+Deutschlandfunk, RFI Monde, NPO Radio 1). Candidates sourced from the
+Radio-Browser directory (api.radio-browser.info) and each verified reachable
+with a real bounded GET (not HEAD — several of these reject HEAD) before
+inclusion.
+
+Also added: a Voice dropdown on TTS segments (Kokoro voices, "(station
+default)" as the blank/first option) — the backend already accepted a
+per-segment `voice` override, it just had no UI. Verified end-to-end: picked
+`af_alloy` renders through Kokoro correctly (not just a cosmetic select).
+
+Weather TTS now confirmed fully working — `OWM_API_KEY`'s earlier `401` was
+indeed just OpenWeatherMap's new-key activation delay; it's since resolved.
+
 Not yet done:
-- `OWM_API_KEY` delivered but returning `401` from OpenWeatherMap — almost
-  certainly their normal new-key activation delay (up to ~2h on free tier),
-  not a config problem (key format/length checked out). Re-test
-  `/api/tts_test?topic=weather&location=<zip>` once it's had time to activate.
-- Staleness re-render test (needs a working `tts` segment — blocked on the
-  above).
+- Staleness re-render test (needs a working `tts` segment — now unblocked
+  now that weather works, just hasn't been run).
 - A dedicated playwright test host for the fleet was requested earlier but
   not yet stood up — this session installed Chromium ad-hoc in a venv for
   browser tests (multiple rounds), then removed it each time (~810MB, not

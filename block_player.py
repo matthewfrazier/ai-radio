@@ -13,7 +13,6 @@ one of the two may hold the Icecast source mount at a time.
 import os
 import signal
 import subprocess
-import sys
 
 import block_render as br
 
@@ -31,10 +30,10 @@ def _handle_signal(signum, frame):
 
 
 def load_srcpw():
-    for l in open(STUBENV):
-        l = l.strip()
-        if l.startswith("SRCPW="):
-            return l.split("=", 1)[1]
+    for line in open(STUBENV):
+        line = line.strip()
+        if line.startswith("SRCPW="):
+            return line.split("=", 1)[1]
     raise RuntimeError("SRCPW not found in .stubenv")
 
 

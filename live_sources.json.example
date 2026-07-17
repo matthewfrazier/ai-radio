@@ -1,6 +1,64 @@
 {
   "sources": [
-    {"id": "npr", "name": "NPR Newscast", "url": "https://npr-ice.streamguys1.com/live.mp3", "homepage": "https://www.npr.org/"},
-    {"id": "bbc_world", "name": "BBC World Service", "url": "https://stream.live.vc.bbcmedia.co.uk/bbc_world_service", "homepage": "https://www.bbc.co.uk/worldserviceradio"}
+    {
+      "id": "npr",
+      "name": "NPR Newscast",
+      "url": "http://pd.npr.org/anon.npr-mp3/npr/news/newscast.mp3",
+      "homepage": "https://www.npr.org/podcasts/500005/npr-news-now"
+    },
+    {
+      "id": "bbc_world",
+      "name": "BBC World Service",
+      "url": "https://stream.live.vc.bbcmedia.co.uk/bbc_world_service",
+      "homepage": "https://www.bbc.co.uk/worldserviceradio"
+    },
+    {
+      "id": "cnn",
+      "name": "CNN",
+      "url": "https://tunein.cdnstream1.com/2868_96.mp3",
+      "homepage": "https://www.cnn.com/audio"
+    },
+    {
+      "id": "fox_news_radio",
+      "name": "Fox News Radio",
+      "url": "https://live.amperwave.net/direct/foxnewsradio-foxnewsradioaac-imc?source=fnr.web",
+      "homepage": "https://www.foxnewsradio.com/"
+    },
+    {
+      "id": "msnbc",
+      "name": "MSNBC",
+      "url": "https://tunein.cdnstream1.com/3511_96.mp3",
+      "homepage": "https://www.msnbc.com/"
+    },
+    {
+      "id": "nbc_news_radio",
+      "name": "NBC News Radio",
+      "url": "http://stream.revma.ihrhls.com/zc6043",
+      "homepage": "https://nbcnewsradio.com/"
+    },
+    {
+      "id": "bloomberg_radio",
+      "name": "Bloomberg Radio",
+      "url": "http://26433.live.streamtheworld.com/WBBRAMAAC_SC",
+      "homepage": "https://www.bloomberg.com/audio"
+    },
+    {
+      "id": "deutschlandfunk",
+      "name": "Deutschlandfunk",
+      "url": "https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3?aggregator=web",
+      "homepage": "https://www.deutschlandfunk.de/"
+    },
+    {
+      "id": "rfi_monde",
+      "name": "RFI Monde",
+      "url": "http://live02.rfi.fr/rfimonde-64.mp3",
+      "homepage": "https://www.rfi.fr/"
+    },
+    {
+      "id": "npo_radio1",
+      "name": "NPO Radio 1",
+      "url": "http://icecast.omroep.nl/radio1-bb-mp3",
+      "homepage": "https://www.nporadio1.nl/"
+    }
   ]
 }

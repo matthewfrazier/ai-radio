@@ -10,6 +10,7 @@ render code path, not three.
 """
 import json
 import os
+import shutil
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -88,6 +89,12 @@ def save_block(block):
         json.dump(block, f, indent=2)
     os.replace(tmp, os.path.join(d, "block.json"))
     write_markdown(block)
+
+
+def delete_block(block_id):
+    d = block_dir(block_id)
+    if os.path.isdir(d):
+        shutil.rmtree(d)
 
 
 def create_block(title):

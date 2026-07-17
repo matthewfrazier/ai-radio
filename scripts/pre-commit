@@ -1,0 +1,15 @@
+#!/bin/bash
+# Git pre-commit hook: lint + test the ai-radio overlay before allowing a
+# commit. Installed via scripts/install-hooks.sh (not tracked directly in
+# .git/hooks/, which git doesn't version).
+set -euo pipefail
+# readlink -f, not dirname "$0", because this runs via a symlink at
+# .git/hooks/pre-commit -- $0 reflects that shallow path, not this file's
+# real location two directories deeper.
+cd "$(dirname "$(readlink -f "$0")")/.."
+
+echo "pre-commit: linting ai-radio overlay..."
+./scripts/lint.sh
+
+echo "pre-commit: running ai-radio overlay tests..."
+./scripts/test.sh

@@ -5,7 +5,6 @@ through here. Ollama needs no credentials; Claude reads a key from
 anthropic.conf (vault-provisioned, mirrors jellyfin.conf's format).
 """
 import json
-import os
 import urllib.request
 
 ANTHROPIC_CONF = "/opt/writ-fm/anthropic.conf"
@@ -19,10 +18,10 @@ LLM_BACKENDS = {
 
 def _load_anthropic_conf(path=ANTHROPIC_CONF):
     c = {}
-    for l in open(path):
-        l = l.strip()
-        if "=" in l and not l.startswith("#"):
-            k, v = l.split("=", 1)
+    for line in open(path):
+        line = line.strip()
+        if "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
             c[k] = v
     return c
 

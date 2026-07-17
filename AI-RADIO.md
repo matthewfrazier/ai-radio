@@ -23,6 +23,17 @@ upstream fixes with `git fetch upstream && git merge upstream/main`.
   `/admin` = panel (:8080).
 - Kokoro TTS reached over the tailnet/LAN (see `station.json`, gitignored).
 
+## Dev workflow
+- `./scripts/install-hooks.sh` (once per clone) wires up `.git/hooks/pre-commit`
+  to lint + test the overlay before every commit — `git commit --no-verify` to
+  bypass deliberately.
+- `./scripts/lint.sh` / `./scripts/test.sh` — same checks, runnable standalone.
+  Scoped to the overlay (root-level `*.py` + `tests/test_ai_radio_*.py`), not
+  upstream `mac/`, which has its own heavy ML dependency stack.
+- `./scripts/reload-panel.sh` — syntax-check + restart `writ-panel.service` +
+  confirm it's back up, after editing panel.py/blocks_page.py/etc.
+- CI: `.github/workflows/ci.yml` runs the same lint+test on push/PR.
+
 ## Secrets / state (never committed — see .gitignore)
 - `jellyfin.conf` (Jellyfin user+pass, from the vault) — copy from `.example`, chmod 600.
 - `.stubenv` (`SRCPW`, Icecast source password) — copy from `.example`.

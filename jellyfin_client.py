@@ -6,7 +6,6 @@ Used by jf_source.py (CLI, unchanged output shape) and block_render.py
 original jf_source.py — no token caching.
 """
 import json
-import os
 import urllib.parse
 import urllib.request
 
@@ -15,10 +14,10 @@ CONF_DEFAULT = "/opt/writ-fm/jellyfin.conf"
 
 def load_conf(path=CONF_DEFAULT):
     c = {}
-    for l in open(path):
-        l = l.strip()
-        if "=" in l and not l.startswith("#"):
-            k, v = l.split("=", 1)
+    for line in open(path):
+        line = line.strip()
+        if "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
             c[k] = v
     return c
 

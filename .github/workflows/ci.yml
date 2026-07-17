@@ -1,0 +1,22 @@
+name: ai-radio overlay CI
+
+# Scoped to the ai-radio overlay (root-level *.py + tests/test_ai_radio_*.py),
+# not the upstream mac/ framework -- that has its own heavy ML dependency
+# stack (torch, transformers, etc.) unrelated to this feature. The overlay
+# itself is stdlib-only, so this workflow needs nothing but ruff.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - run: ./scripts/lint.sh
+      - run: ./scripts/test.sh
