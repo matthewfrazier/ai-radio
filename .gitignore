@@ -65,3 +65,5 @@ program_blocks/
 block_queue.json
 block_player.pid
 .block_sink.fifo
+.state.lock
+schedule.json

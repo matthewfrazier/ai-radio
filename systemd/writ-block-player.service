@@ -1,0 +1,23 @@
+[Unit]
+Description=WRIT-FM programming-block player (sequences a block queue onto Icecast)
+After=icecast2.service network-online.target
+Wants=icecast2.service
+# Only one source may hold the Icecast /stream mount at a time. Starting the
+# player stops the static fallback loop (Conflicts is symmetric); when the
+# player stops -- drain, crash, or kill -- ExecStopPost restores it. Keeping
+# this arbitration in systemd (not two Python actors + a broad pkill) is what
+# removes the dead-air / mount-fight / stranded-queue failure modes.
+Conflicts=writ-stream.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/writ-fm/block_player.py
+Restart=no
+# Runs on natural drain (exit 0) AND on SIGKILL/OOM (unlike a Python finally),
+# so the static music loop always comes back when programming ends. The '-'
+# ignores a nonzero exit from the restore command.
+ExecStopPost=-/usr/bin/systemctl start writ-stream.service
+
+# Intentionally no [Install]: the player is started on demand by the panel
+# (and by the panel's boot-time queue reconciliation), never enabled to
+# auto-start independent of a queued block.

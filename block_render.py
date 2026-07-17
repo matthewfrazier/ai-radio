@@ -8,6 +8,8 @@ used by the whole-block Test/Preview action, the manual "regenerate"
 action, and the schedule ("play now"/"queue") action alike, so there is one
 render code path, not three.
 """
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -26,6 +28,24 @@ BASE = "/opt/writ-fm"
 BLOCKS_DIR = os.path.join(BASE, "program_blocks")
 STATION_CFG = os.path.join(BASE, "station.json")
 QUEUE_FILE = os.path.join(BASE, "block_queue.json")
+STATE_LOCK = os.path.join(BASE, ".state.lock")
+
+
+@contextlib.contextmanager
+def _state_lock():
+    """Cross-process mutex around block.json / block_queue.json
+    read-modify-write. The panel (threaded HTTP handlers) and the player
+    (a separate process) both mutate this state; without a lock an
+    "add to playlist" append can clobber the player's pop, or a render can
+    lose a concurrent title/segments save. flock is released on close.
+    Do NOT nest the *_unlocked helpers under an already-held lock via the
+    public wrappers — that would deadlock on a second exclusive flock."""
+    fd = os.open(STATE_LOCK, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 DEFAULT_STATION_CFG = {"kokoro": "http://192.168.1.74:8880", "voice": "am_michael", "speed": 1.0}
 DEFAULT_TTS_TTL_S = 1800
@@ -91,7 +111,7 @@ def load_block(block_id):
         return json.load(f)
 
 
-def save_block(block):
+def _save_block_unlocked(block):
     d = block_dir(block["id"])
     os.makedirs(d, exist_ok=True)
     tmp = os.path.join(d, "block.json.tmp")
@@ -99,6 +119,11 @@ def save_block(block):
         json.dump(block, f, indent=2)
     os.replace(tmp, os.path.join(d, "block.json"))
     write_markdown(block)
+
+
+def save_block(block):
+    with _state_lock():
+        _save_block_unlocked(block)
 
 
 def delete_block(block_id):
@@ -241,34 +266,60 @@ def render_block(block_id, force=False):
             seg["error"] = str(e)
             changed = True
     if changed:
-        block["updated_at"] = now_iso()
-        save_block(block)
+        # Re-read under lock and merge only the resolution fields back onto
+        # the current on-disk block, so a title/segments edit made in the
+        # panel *during* this (possibly slow, network-bound) render isn't
+        # lost. The lock is held only for the fast merge+write, never during
+        # the resolution I/O above.
+        with _state_lock():
+            fresh = load_block(block_id)
+            resolved = {s["id"]: s for s in block["segments"]}
+            for fs in fresh["segments"]:
+                src = resolved.get(fs["id"])
+                if src is None:
+                    continue
+                for k in ("resolved", "status", "rendered_at", "resolved_at", "error"):
+                    if k in src:
+                        fs[k] = src[k]
+                if fs.get("status") == "ok":
+                    fs.pop("error", None)  # a prior failure that this render cleared
+            fresh["updated_at"] = now_iso()
+            _save_block_unlocked(fresh)
+        return fresh
     return block
 
 
 def mark_scheduled(block_id, state):
-    block = load_block(block_id)
-    block["schedule"]["state"] = state
-    if state == "queued":
-        block["schedule"]["queued_at"] = now_iso()
-    elif state == "played":
-        block["schedule"]["aired_at"] = now_iso()
-    save_block(block)
-    return block
+    with _state_lock():
+        block = load_block(block_id)
+        block["schedule"]["state"] = state
+        if state == "queued":
+            block["schedule"]["queued_at"] = now_iso()
+        elif state == "played":
+            block["schedule"]["aired_at"] = now_iso()
+        _save_block_unlocked(block)
+        return block
 
 
 def load_queue():
+    # Pure read; writes are atomic (os.replace) so this is torn-read safe
+    # without taking the lock. Read-modify-write callers below DO lock.
     if not os.path.exists(QUEUE_FILE):
         return []
     with open(QUEUE_FILE) as f:
         return json.load(f).get("queue", [])
 
 
-def save_queue(queue):
+def _save_queue_unlocked(queue):
     tmp = QUEUE_FILE + ".tmp"
     with open(tmp, "w") as f:
         json.dump({"queue": queue}, f)
     os.replace(tmp, QUEUE_FILE)
+
+
+def save_queue(queue):
+    with _state_lock():
+        _save_queue_unlocked(queue)
 
 
 def queue_now(block_id):
@@ -276,10 +327,11 @@ def queue_now(block_id):
 
 
 def queue_append(block_id):
-    q = load_queue()
-    q.append(block_id)
-    save_queue(q)
-    return q
+    with _state_lock():
+        q = load_queue()
+        q.append(block_id)
+        _save_queue_unlocked(q)
+        return q
 
 
 def pop_front(expected_id=None):
@@ -287,8 +339,10 @@ def pop_front(expected_id=None):
     # (its queue already overwritten to the new block by schedule_block)
     # must not pop the newly-scheduled block off the front. It only removes
     # the block it actually played.
-    q = load_queue()
-    if q and (expected_id is None or q[0] == expected_id):
-        q.pop(0)
-        save_queue(q)
+    with _state_lock():
+        q = load_queue()
+        if q and (expected_id is None or q[0] == expected_id):
+            q.pop(0)
+            _save_queue_unlocked(q)
+        return q
     return q

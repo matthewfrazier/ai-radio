@@ -12,9 +12,6 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-import signal
-import time
-
 from tts_engines import kokoro_voices, kokoro_speech
 import block_render
 import blocks_page
@@ -295,8 +292,7 @@ loadSources();
 </body></html>"""
 
 
-PLAYER_SCRIPT = os.path.join(BASE, "block_player.py")
-PLAYER_PID_FILE = os.path.join(BASE, "block_player.pid")
+PLAYER_UNIT = "writ-block-player.service"
 
 
 def _api_route(path):
@@ -308,50 +304,43 @@ def _api_route(path):
     return path[idx + len("/api/"):].strip("/").split("/")
 
 
-def _player_pid():
-    try:
-        with open(PLAYER_PID_FILE) as f:
-            pid = int(f.read().strip())
-        os.kill(pid, 0)
-        return pid
-    except Exception:
-        return None
+def _player_active():
+    return subprocess.run(["systemctl", "is-active", "--quiet", PLAYER_UNIT]).returncode == 0
 
 
-def _spawn_player():
-    subprocess.Popen(["python3", PLAYER_SCRIPT], cwd=BASE,
-                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                      start_new_session=True)
+def _start_player():
+    # systemd's Conflicts= stops the static writ-stream loop for us.
+    subprocess.run(["systemctl", "start", PLAYER_UNIT], capture_output=True)
+
+
+def _cutover_player():
+    # SIGHUP = "abandon current block, re-read the queue" -- an in-process
+    # cutover that avoids stopping the unit (which would flap writ-stream).
+    subprocess.run(["systemctl", "kill", "-s", "HUP", PLAYER_UNIT], capture_output=True)
 
 
 def schedule_block(block_id, mode):
+    # Render now so resolve/render errors surface in the UI immediately; the
+    # player re-renders again at air time, so a block that waits in the queue
+    # never airs stale content.
     block_render.render_block(block_id, force=False)
     if mode == "now":
-        subprocess.run(["systemctl", "stop", "writ-stream.service"], capture_output=True)
-        block_render.queue_now(block_id)
-        pid = _player_pid()
-        if pid:
-            os.kill(pid, signal.SIGTERM)
-            for _ in range(25):  # wait for the FIFO/pid file to release before respawning
-                if _player_pid() is None:
-                    break
-                time.sleep(0.2)
-        _spawn_player()
+        block_render.queue_now(block_id)  # overwrite: play-now drops the rest of the queue
+        if _player_active():
+            _cutover_player()
+        else:
+            _start_player()
     else:
-        was_idle = _player_pid() is None
         block_render.queue_append(block_id)
-        if was_idle:
-            subprocess.run(["systemctl", "stop", "writ-stream.service"], capture_output=True)
-            _spawn_player()
+        if not _player_active():
+            _start_player()
     block_render.mark_scheduled(block_id, "queued")
     return {"ok": True, "queue": block_render.load_queue()}
 
 
 def stop_block_player():
-    pid = _player_pid()
-    if pid:
-        os.kill(pid, signal.SIGTERM)
     block_render.save_queue([])
+    subprocess.run(["systemctl", "stop", PLAYER_UNIT], capture_output=True)
 
 
 def delete_block_safe(block_id):
@@ -543,4 +532,13 @@ if __name__ == "__main__":
     os.makedirs(AUDIO, exist_ok=True)
     if not os.path.exists(CFG):
         save_cfg(DEFAULT)
+    # Reboot recovery: if a block was still queued when the box went down,
+    # resume it. writ-stream is already airing the static loop (it's the
+    # enabled fallback), and the player re-renders at air time, so resuming
+    # a pre-reboot queue is safe.
+    try:
+        if block_render.load_queue() and not _player_active():
+            _start_player()
+    except Exception:
+        pass
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()

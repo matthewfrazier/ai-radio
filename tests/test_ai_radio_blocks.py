@@ -167,6 +167,53 @@ class QueuePopTests(unittest.TestCase):
         self.assertEqual(block_render.load_queue(), [])
 
 
+class RenderMergeTests(unittest.TestCase):
+    """render_block resolves outside the lock, then merges only resolution
+    fields back onto the *current* on-disk block, so a title/segments edit
+    made during a slow render isn't lost (the block.json write race)."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._p1 = patch.object(block_render, "BLOCKS_DIR", self._tmpdir.name)
+        self._p2 = patch.object(block_render, "STATE_LOCK",
+                                os.path.join(self._tmpdir.name, ".state.lock"))
+        self._p1.start()
+        self._p2.start()
+
+    def tearDown(self):
+        self._p2.stop()
+        self._p1.stop()
+        self._tmpdir.cleanup()
+
+    def test_concurrent_title_edit_survives_render(self):
+        bid = "20260101T000000"
+        seg = {"id": "seg-0", "type": "live", "params": {"source_id": "npr", "duration_s": 10}}
+        loaded = {"id": bid, "title": "old", "created_at": "t", "updated_at": "t",
+                  "segments": [seg], "schedule": {"state": "draft", "queued_at": None, "aired_at": None}}
+        # what's on disk when render re-reads under the lock: title was edited
+        fresh = {"id": bid, "title": "edited mid-render", "created_at": "t", "updated_at": "t",
+                 "segments": [{"id": "seg-0", "type": "live",
+                               "params": {"source_id": "npr", "duration_s": 10}}],
+                 "schedule": {"state": "draft", "queued_at": None, "aired_at": None}}
+        loads = [loaded, fresh]
+
+        def fake_load(_bid):
+            return loads.pop(0)
+
+        def fake_resolve(s):
+            s["resolved"] = {"title": "NPR", "url": "http://x/newscast.mp3"}
+            s["status"] = "ok"
+            s["resolved_at"] = "t"
+
+        with patch.object(block_render, "load_block", side_effect=fake_load), \
+             patch.object(block_render, "resolve_live_segment", side_effect=fake_resolve):
+            result = block_render.render_block(bid)
+
+        self.assertEqual(result["title"], "edited mid-render")       # concurrent edit preserved
+        self.assertEqual(result["segments"][0]["status"], "ok")      # resolution merged in
+        self.assertEqual(result["segments"][0]["resolved"]["url"], "http://x/newscast.mp3")
+
+
 class StalenessTests(unittest.TestCase):
     """Pure logic, no I/O: TTS staleness is the mechanism that guarantees a
     weather segment never airs stale."""
