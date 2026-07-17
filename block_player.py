@@ -10,9 +10,12 @@ closes, which would kill the sink mid-block). Restarts writ-stream.service
 (the static Jellyfin loop) when the queue drains or on shutdown, since only
 one of the two may hold the Icecast source mount at a time.
 """
+import errno
+import fcntl
 import os
 import signal
 import subprocess
+import time
 
 import block_render as br
 
@@ -82,7 +85,30 @@ class Sink:
             os.remove(FIFO_PATH)
         os.mkfifo(FIFO_PATH)
         self.proc = start_sink(self.srcpw)
-        self.fd = os.open(FIFO_PATH, os.O_WRONLY)  # blocks until sink opens its read end
+        # Open the write end WITHOUT blocking forever. A plain O_WRONLY open
+        # blocks until a reader appears, and -- because our SIGTERM handler
+        # only sets a flag (PEP 475 auto-retries the interrupted syscall) --
+        # if the sink ffmpeg dies at startup (bad SRCPW, Icecast down) that
+        # open never returns and the process becomes unkillable dead air.
+        # Poll O_NONBLOCK (ENXIO = no reader yet) so we stay responsive to
+        # stop requests and to the sink dying, then clear O_NONBLOCK for
+        # normal blocking writes.
+        fd = None
+        while not _stop_requested:
+            try:
+                fd = os.open(FIFO_PATH, os.O_WRONLY | os.O_NONBLOCK)
+                break
+            except OSError as e:
+                if e.errno != errno.ENXIO:
+                    raise
+                if self.proc.poll() is not None:
+                    raise RuntimeError("sink ffmpeg exited before opening the FIFO")
+                time.sleep(0.1)
+        if fd is None:
+            raise RuntimeError("stop requested before sink was ready")
+        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+        fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
+        self.fd = fd
 
     def write(self, chunk):
         try:
@@ -150,7 +176,7 @@ def main():
                 if _stop_requested:
                     break
                 run_segment(seg, bdir, sink)
-            br.pop_front()
+            br.pop_front(block_id)
             br.mark_scheduled(block_id, "played")
     finally:
         sink.close()

@@ -82,13 +82,89 @@ class BlockCrudTests(unittest.TestCase):
         self.assertEqual(block_render.list_blocks(), [])
 
     def test_delete_nonexistent_block_is_a_noop(self):
-        block_render.delete_block("does-not-exist")  # must not raise
+        block_render.delete_block("20200101T000000")  # valid shape, absent -> no raise
 
     def test_new_block_id_avoids_collision(self):
         first = block_render.new_block_id()
         os.makedirs(block_render.block_dir(first))
         second = block_render.new_block_id()
         self.assertNotEqual(first, second)
+
+
+class BlockIdValidationTests(unittest.TestCase):
+    """block_dir() is the single chokepoint turning an id into a filesystem
+    path; it must reject anything that isn't a minted block id so a URL
+    segment like ".." can't escape BLOCKS_DIR (a DELETE would rmtree BASE)."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._patcher = patch.object(block_render, "BLOCKS_DIR", self._tmpdir.name)
+        self._patcher.start()
+
+    def tearDown(self):
+        self._patcher.stop()
+        self._tmpdir.cleanup()
+
+    def test_accepts_minted_ids(self):
+        self.assertTrue(block_render.block_dir("20260717T052001").endswith("20260717T052001"))
+        self.assertTrue(block_render.block_dir("20260717T052001-2").endswith("20260717T052001-2"))
+
+    def test_rejects_traversal_and_junk(self):
+        for bad in ["..", "../evil", "foo/bar", "", "/etc", ".", "20260717T052001/..",
+                    "20260717T052001; rm -rf", "%2e%2e"]:
+            with self.assertRaises(ValueError, msg="should reject %r" % bad):
+                block_render.block_dir(bad)
+
+    def test_delete_block_rejects_traversal_without_touching_fs(self):
+        # a marker file one level up from BLOCKS_DIR must survive a
+        # delete_block("..") attempt (which would otherwise resolve to it).
+        parent = os.path.dirname(self._tmpdir.name)
+        marker = os.path.join(parent, "MARKER_KEEP")
+        with open(marker, "w") as f:
+            f.write("keep")
+        try:
+            with self.assertRaises(ValueError):
+                block_render.delete_block("..")
+            self.assertTrue(os.path.exists(marker))
+        finally:
+            os.remove(marker)
+
+
+class QueuePopTests(unittest.TestCase):
+    """pop_front(expected_id) is the root-cause fix for the play-now cutover
+    race: a torn-down player must not pop a block it didn't play."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._patcher = patch.object(block_render, "QUEUE_FILE",
+                                     os.path.join(self._tmpdir.name, "block_queue.json"))
+        self._patcher.start()
+
+    def tearDown(self):
+        self._patcher.stop()
+        self._tmpdir.cleanup()
+
+    def test_pop_matching_front_removes_it(self):
+        block_render.save_queue(["a", "b"])
+        block_render.pop_front("a")
+        self.assertEqual(block_render.load_queue(), ["b"])
+
+    def test_pop_non_matching_front_is_a_noop(self):
+        # the play-now race: queue was overwritten to [new] before the old
+        # player (which played [old]) tears down and calls pop_front("old").
+        block_render.save_queue(["new_block"])
+        block_render.pop_front("old_block")
+        self.assertEqual(block_render.load_queue(), ["new_block"])
+
+    def test_pop_without_expected_id_still_pops(self):
+        block_render.save_queue(["a", "b"])
+        block_render.pop_front()
+        self.assertEqual(block_render.load_queue(), ["b"])
+
+    def test_pop_empty_queue_is_a_noop(self):
+        block_render.save_queue([])
+        block_render.pop_front("anything")
+        self.assertEqual(block_render.load_queue(), [])
 
 
 class StalenessTests(unittest.TestCase):

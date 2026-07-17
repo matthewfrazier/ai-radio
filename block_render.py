@@ -10,6 +10,7 @@ render code path, not three.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -29,6 +30,13 @@ QUEUE_FILE = os.path.join(BASE, "block_queue.json")
 DEFAULT_STATION_CFG = {"kokoro": "http://192.168.1.74:8880", "voice": "am_michael", "speed": 1.0}
 DEFAULT_TTS_TTL_S = 1800
 
+# Block ids are always minted by new_block_id() as a timestamp (optionally
+# "-N" on same-second collision). Validating the shape here — at the one
+# place ids are turned into filesystem paths — stops a hostile/typo'd id
+# from a URL segment (e.g. "..") from escaping BLOCKS_DIR; without this a
+# DELETE /api/blocks/.. would rmtree all of BASE.
+_BLOCK_ID_RE = re.compile(r"^\d{8}T\d{6}(-\d+)?$")
+
 
 def now_iso():
     return datetime.now(timezone.utc).astimezone().isoformat()
@@ -46,6 +54,8 @@ def load_station_cfg():
 
 
 def block_dir(block_id):
+    if not _BLOCK_ID_RE.match(block_id or ""):
+        raise ValueError("invalid block id: %r" % (block_id,))
     return os.path.join(BLOCKS_DIR, block_id)
 
 
@@ -272,9 +282,13 @@ def queue_append(block_id):
     return q
 
 
-def pop_front():
+def pop_front(expected_id=None):
+    # expected_id guards the play-now cutover race: a player being torn down
+    # (its queue already overwritten to the new block by schedule_block)
+    # must not pop the newly-scheduled block off the front. It only removes
+    # the block it actually played.
     q = load_queue()
-    if q:
+    if q and (expected_id is None or q[0] == expected_id):
         q.pop(0)
         save_queue(q)
     return q
