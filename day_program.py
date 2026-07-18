@@ -44,7 +44,13 @@ def generate_day(date_str, template="standard_hour", opts=None, today=None, dry_
     builder = hour_templates.TEMPLATES.get(template)
     if not builder:
         raise ValueError("unknown template: %s" % template)
-    opts = opts or {}
+    opts = dict(opts or {})
+    # default weather location + AI recap backend from the station config, so a
+    # day generated from the /day button (no opts) still gets them.
+    cfg = block_render.load_station_cfg()
+    opts.setdefault("weather_location", cfg.get("weather_location", ""))
+    opts.setdefault("llm_backend", cfg.get("recap_llm_backend", ""))
+    opts.setdefault("llm_model", cfg.get("recap_llm_model", ""))
     airing = (block_render.load_queue() or [None])[0]
 
     blocks, entries, warnings = [], [], []

@@ -68,6 +68,8 @@ def weather_script(place, w):
 
 
 def build_weather_text(location):
+    if not (location or "").strip():
+        raise RuntimeError("no weather location set (set one in /day, or a station default)")
     conf = load_weather_conf()
     api_key = conf.get("OWM_API_KEY", "")
     if not api_key:

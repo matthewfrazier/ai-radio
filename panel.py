@@ -571,8 +571,21 @@ class H(BaseHTTPRequestHandler):
                     result = day_program.generate_day(route[1], body.get("template", "standard_hour"),
                                                        body.get("opts"), today=today)
                     return self._send(200, "application/json", json.dumps(result).encode())
+                if route == ["station"]:
+                    cfg = load_cfg()
+                    for k in ("weather_location", "recap_llm_backend", "recap_llm_model"):
+                        if k in body:
+                            cfg[k] = body[k]
+                    save_cfg(cfg)
+                    return self._send(200, "application/json", json.dumps(
+                        {"ok": True, "weather_location": cfg.get("weather_location", ""),
+                         "recap_llm_backend": cfg.get("recap_llm_backend", "")}).encode())
                 if len(route) == 3 and route[0] == "day" and route[2] == "bulk":
                     r = day_program.bulk_edit(route[1], body["field"], body["value"], body.get("hours"))
+                    if body["field"] == "weather_location":
+                        cfg = load_cfg()  # persist as the station default for future days
+                        cfg["weather_location"] = body["value"]
+                        save_cfg(cfg)
                     return self._send(200, "application/json", json.dumps(r).encode())
                 if len(route) == 4 and route[0] == "day" and route[2] == "hour":
                     block = day_program.patch_hour(route[1], route[3], body)
