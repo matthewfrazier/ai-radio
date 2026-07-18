@@ -62,12 +62,22 @@ def cmd_start(target_uuid, url, ctype):
     mc.play_media(url, content_type=ctype, stream_type="LIVE", title="ai-radio")
     mc.block_until_active(timeout=DISCOVERY_TIMEOUT)
     # poll briefly for the player to accept the media (BUFFERING/PLAYING) vs
-    # reject it (IDLE with an error) -- this is the format-compat signal.
+    # reject it (IDLE with an error) -- this is the format-compat signal. Some
+    # receivers load LIVE media but sit in PAUSED (or briefly IDLE) until told
+    # to play, so nudge play() once when we see that, otherwise the caller gets
+    # a spurious "could not cast (state PAUSED)".
+    nudged = False
     state = mc.status.player_state
-    for _ in range(24):
+    for _ in range(32):
         state = mc.status.player_state
         if state in ("PLAYING", "BUFFERING"):
             break
+        if state in ("PAUSED", "IDLE") and not nudged:
+            try:
+                mc.play()
+            except Exception:
+                pass
+            nudged = True
         time.sleep(0.25)
     result = {"uuid": target_uuid, "name": cc.name, "state": state,
               "idle_reason": mc.status.idle_reason}
@@ -91,8 +101,9 @@ def cmd_stop(target_uuid):
     except Exception:
         pass
     cc.quit_app()
+    name = cc.name
     _stop_browser(browser)
-    return {"uuid": target_uuid, "stopped": True}
+    return {"uuid": target_uuid, "name": name, "stopped": True}
 
 
 def cmd_status(target_uuid):

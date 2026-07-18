@@ -302,7 +302,14 @@ loadSources();
 
 
 PLAYER_UNIT = "writ-block-player.service"
+PANEL_UNIT = "writ-panel.service"
 PLAYER_STATE_FILE = os.path.join(BASE, "player_state.json")
+
+
+def _log_cast(msg):
+    # goes to writ-panel journald; surfaced in the /now run log alongside the
+    # player's own events so cast outcomes are visible where the operator looks.
+    print("cast: %s" % msg, flush=True)
 
 
 CAST_PY = os.path.join(BASE, ".venv-cast", "bin", "python")
@@ -392,22 +399,25 @@ def _player_active():
 
 
 def player_log(n=30):
-    """Recent block-player events for the /now run log, so the operator can see
-    WHY the stream did what it did (cutover, render/filler, idle, drain). Reads
-    journald and keeps only our own 'block_player:' narrative lines."""
-    try:
-        p = subprocess.run(
-            ["journalctl", "-u", PLAYER_UNIT, "-n", "400", "--no-pager", "-o", "short-iso"],
-            capture_output=True, text=True, timeout=5)
-        out = []
-        for ln in p.stdout.splitlines():
-            if "block_player:" not in ln:
-                continue
-            # short-iso line: "2026-07-18T20:01:02+0000 host unit[pid]: block_player: msg"
-            out.append({"t": ln[11:19], "m": ln.split("block_player:", 1)[1].strip()})
-        return out[-n:]
-    except Exception as e:
-        return [{"t": "", "m": "log unavailable: %s" % e}]
+    """Recent station events for the /now run log, so the operator can see WHY
+    the stream did what it did: player narrative ('block_player:' -- cutover,
+    render/filler, idle, drain) merged with cast outcomes ('cast:' from the
+    panel), sorted by time. Both units log to journald on this host."""
+    out = []
+    for unit, needle in ((PLAYER_UNIT, "block_player:"), (PANEL_UNIT, "cast:")):
+        try:
+            p = subprocess.run(
+                ["journalctl", "-u", unit, "-n", "300", "--no-pager", "-o", "short-iso"],
+                capture_output=True, text=True, timeout=5)
+            for ln in p.stdout.splitlines():
+                if needle not in ln:
+                    continue
+                # "2026-07-18T20:01:02+0000 host unit[pid]: <needle> msg"
+                out.append({"ts": ln[:19], "t": ln[11:19], "m": ln.split(needle, 1)[1].strip()})
+        except Exception as e:
+            out.append({"ts": "", "t": "", "m": "%s log unavailable: %s" % (unit, e)})
+    out.sort(key=lambda r: r["ts"])
+    return [{"t": r["t"], "m": r["m"]} for r in out[-n:]]
 
 
 def _start_player():
@@ -665,11 +675,16 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, "application/json", json.dumps(result).encode())
                 if route == ["cast", "start"]:
                     r = _cast("start", body["uuid"], _cast_stream_url(), "audio/mpeg")
-                    if r.get("state") in ("PLAYING", "BUFFERING"):
+                    ok = r.get("state") in ("PLAYING", "BUFFERING")
+                    _log_cast("start %s -> %s%s" % (
+                        r.get("name") or body.get("uuid", "?"), r.get("state") or r.get("error") or "?",
+                        (" [%s]" % r["hint"]) if r.get("hint") else ""))
+                    if ok:
                         _cast_target_write({"uuid": r.get("uuid"), "name": r.get("name")})
                     return self._send(200, "application/json", json.dumps(r).encode())
                 if route == ["cast", "stop"]:
                     r = _cast("stop", body["uuid"])
+                    _log_cast("stop %s" % (r.get("name") or body.get("uuid", "?")))
                     _cast_target_clear()
                     return self._send(200, "application/json", json.dumps(r).encode())
                 if route == ["station"]:

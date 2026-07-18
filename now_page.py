@@ -336,8 +336,10 @@ $('btnNext').onclick=()=>{ if(airingId && airingCount && airingIdx<airingCount-1
 
 // --- Run log (recent player events) ---
 function logClass(m){
+  if(/-> (PLAYING|BUFFERING)/.test(m)) return 'k';                       // cast ok
+  if(/PAUSED|IDLE|failed|error|could not|not allowed/i.test(m)) return 'w'; // trouble
   if(/cutover|render gap|idle|drain|exiting|sink/.test(m)) return 'w';
-  if(/airing block|segment /.test(m)) return 'k';
+  if(/airing block|segment |^start |^stop /.test(m)) return 'k';
   return '';
 }
 async function loadLog(){
