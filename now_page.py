@@ -36,40 +36,57 @@ pre{white-space:pre-wrap;background:#8881;padding:.6rem;border-radius:8px;font-s
 .dbg{font-size:.75rem;cursor:pointer;color:#3b82f6;margin-top:.3rem;display:inline-block}
 .now{font-size:.9rem}
 .now b{font-weight:600}
+button{font:inherit;padding:.4rem .9rem;border:1px solid transparent;border-radius:999px;background:#3b82f6;color:#fff;cursor:pointer;font-size:.85rem}
+button.ghost{background:transparent;color:#3b82f6;border-color:#3b82f680}
+button:disabled{opacity:.4;cursor:not-allowed}
+.nowcard{border:1px solid #8884;border-radius:12px;padding:.7rem .8rem;background:rgba(128,128,128,.05)}
+.nowcard.on{border-color:#22c55e;background:rgba(34,197,94,.08)}
+.nowcard .line1{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+.nowcard .segt{font-weight:600;font-size:1rem}
+.nowcard .meta{font-size:.82rem;opacity:.8;margin-top:.35rem}
+.nowcard .prog{height:.3rem;border-radius:999px;background:#8883;margin-top:.5rem;overflow:hidden}
+.nowcard .prog>i{display:block;height:100%;background:#22c55e;width:0}
+.segnav{display:flex;align-items:center;gap:.6rem;margin-top:.5rem}
+.segnav .sub{flex:1;text-align:center;margin:0}
+.row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
+#target{flex:1;min-width:11rem}
+.mb4{margin:0 0 .4rem}
 </style></head><body>
 <h1>ai-radio &middot; now</h1>
 <div class="sub"><a href="/admin">station</a> &middot; <a href="/blocks">blocks</a> &middot; <a href="/day">24-hour day</a></div>
 
 <section>
-  <div class="hd2"><h2>Listen</h2></div>
+  <div class="hd2"><h2>Output</h2></div>
+  <div class="sub mb4">Play on this device <b>or</b> cast to one speaker — one at a time.</div>
+  <div class="row">
+    <select id="target"></select>
+    <button id="btnOut" type="button">Play</button>
+    <button class="ghost" id="btnOutStop" type="button">Stop</button>
+    <button class="ghost" id="btnRescan" type="button">Rescan</button>
+  </div>
   <audio id="player" src="/stream" controls preload="none"></audio>
   <div class="status">
     <span><span id="sdot" class="dot"></span>Stream <span id="sstate">?</span> <span id="listeners"></span></span>
     <span id="stitle"></span>
     <span><a id="surl" href="/stream" target="_blank">open /stream</a></span>
   </div>
-</section>
-
-<section>
-  <div class="hd2"><h2>Cast to a speaker</h2></div>
-  <div class="row" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
-    <select id="castPick" style="flex:1;min-width:10rem"></select>
-    <button id="btnCast" type="button">Cast</button>
-    <button class="ghost" id="btnCastStop" type="button">Stop</button>
-    <button class="ghost" id="btnCastRescan" type="button">Rescan</button>
-  </div>
-  <div class="sub" id="castMsg">scanning for devices…</div>
+  <div class="sub" id="outMsg">scanning for speakers…</div>
 </section>
 
 <section>
   <div class="hd2"><h2>Now airing</h2></div>
   <div class="now" id="now">loading…</div>
+  <div class="segnav">
+    <button class="ghost" id="btnPrev" type="button" disabled>◀ prev segment</button>
+    <span class="sub" id="navMsg"></span>
+    <button class="ghost" id="btnNext" type="button" disabled>next segment ▶</button>
+  </div>
   <div class="sub" id="queue"></div>
 </section>
 
 <section>
   <div class="hd2"><h2>Blocks</h2></div>
-  <div class="sub" style="margin:0 0 .4rem">Pick a block to inspect; press ▶ on any segment to cut the station over and start from there (restart &amp; scrub).</div>
+  <div class="sub mb4">Pick a block to inspect; press ▶ on any segment to cut the station over and start from there (restart &amp; scrub).</div>
   <select id="pick"></select>
   <div class="sub" id="switchMsg"></div>
   <div id="blockView" style="margin-top:.6rem"></div>
@@ -78,7 +95,10 @@ pre{white-space:pre-wrap;background:#8881;padding:.6rem;border-radius:8px;font-s
 <script>
 const $=id=>document.getElementById(id);
 const BASE=location.pathname.replace(/\/+$/,'');
-let picked="", airingId="", airingIdx=-1;
+let picked="", airingId="", airingIdx=-1, airingCount=0, airingStartedMs=0;
+// Output is one-at-a-time: "" none, "local" this device's <audio>, or a cast
+// device uuid. castUuid tracks the speaker we told to play (to stop it).
+let outputTarget="", castUuid="";
 
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
@@ -169,10 +189,47 @@ async function playFrom(id, idx){
     if(!r.ok) throw new Error((await r.text())||('HTTP '+r.status));
     tick.done('switched — starts at segment '+(idx+1)+' after render');
   }catch(e){ tick.fail(e); return; }
-  // reconnect the local <audio> to the freshly-switched stream (cast is
-  // independent and rides through). Cache-buster forces a new connection.
-  const a=$('player');
-  setTimeout(()=>{ a.src='/stream?ts='+Date.now(); a.load(); a.play().catch(()=>{}); }, 5000);
+  // Only the LOCAL player needs to reconnect to the freshly-switched stream
+  // (cache-buster forces a new connection). A cast is independent and rides
+  // through the render on the filler, so leave it alone -- reconnecting local
+  // audio while casting is what used to yank output back to this device.
+  if(outputTarget==='local'){
+    const a=$('player');
+    setTimeout(()=>{ a.src='/stream?ts='+Date.now(); a.load(); a.play().catch(()=>{}); }, 5000);
+  }
+}
+
+function fmtElapsed(ms){
+  if(!ms) return '';
+  const s=Math.max(0,Math.round((Date.now()-ms)/1000));
+  return (s>=60?(Math.floor(s/60)+'m '+(s%60)+'s'):(s+'s'));
+}
+// Repaint just the elapsed counter every second (poll is only every 4s).
+function tickElapsed(){
+  if(!airingStartedMs){ return; }
+  const el=$('elapsed'); if(el) el.textContent=fmtElapsed(airingStartedMs);
+}
+
+function renderNow(st){
+  const card=$('now');
+  if(!st || !st.block_id){
+    card.className='nowcard';
+    card.innerHTML='<span class="sub">No programmed block airing — the static music loop is on.</span>';
+    $('btnPrev').disabled=true; $('btnNext').disabled=true; $('navMsg').textContent='';
+    return;
+  }
+  const idx=st.segment_index??0, n=st.segment_count||0;
+  card.className='nowcard on';
+  card.innerHTML=`<div class="line1">
+      ${st.segment_role?('<span class="badge role">'+esc(st.segment_role)+'</span>'):''}
+      <span class="badge">${esc(st.segment_type||'')}</span>
+      <span class="segt">${esc(st.segment_title||st.segment_id||'')}</span>
+    </div>
+    <div class="meta"><b>${esc(st.title||st.block_id)}</b> &middot; segment ${idx+1} of ${n} &middot; <span id="elapsed">${fmtElapsed(airingStartedMs)}</span> elapsed</div>
+    <div class="prog"><i style="width:${n?Math.round((idx+1)/n*100):0}%"></i></div>`;
+  $('btnPrev').disabled = !(idx>0);
+  $('btnNext').disabled = !(n && idx<n-1);
+  $('navMsg').textContent = 'segment '+(idx+1)+' / '+n;
 }
 
 async function poll(){
@@ -184,14 +241,16 @@ async function poll(){
     $('listeners').textContent=s.live?('· '+(s.listeners||0)+' listening'):'';
     $('stitle').textContent=s.title?('“'+s.title+'”'):'';
     const st=n.state||{};
+    const prevIdx=airingIdx;
     airingId=n.player_active?(st.block_id||''):'';
     airingIdx=n.player_active&&st.segment_index!=null?st.segment_index:-1;
-    if(n.player_active && st.block_id){
-      $('now').innerHTML=`<b>${esc(st.title||st.block_id)}</b> — segment ${(st.segment_index??0)+1}/${st.segment_count||'?'}: `
-        +`${st.segment_role?('<span class="badge role">'+esc(st.segment_role)+'</span>'):''}<span class="badge">${esc(st.segment_type||'')}</span> ${esc(st.segment_title||'')}`;
-    } else {
-      $('now').innerHTML='<span class="sub">No programmed block airing — the static music loop is on.</span>';
+    airingCount=st.segment_count||0;
+    // reset the elapsed anchor when the airing segment changes
+    if(airingIdx!==prevIdx || !airingStartedMs){
+      airingStartedMs = st.started_at?Date.parse(st.started_at):(n.player_active?Date.now():0);
     }
+    if(!n.player_active) airingStartedMs=0;
+    renderNow(n.player_active?st:null);
     $('queue').textContent = (n.queue&&n.queue.length)?('Queue: '+n.queue.join(', ')):'Queue empty.';
     // if a block is airing and nothing is picked, show it
     if(airingId && !picked){ $('pick').value=airingId; picked=airingId; loadBlock(picked); }
@@ -199,50 +258,79 @@ async function poll(){
   }catch(e){}
 }
 
-// --- Cast ---
-async function loadCastDevices(){
-  const tick=tickerFor($('castMsg'),20000); tick.set('scanning for devices');
+$('btnPrev').onclick=()=>{ if(airingId && airingIdx>0) playFrom(airingId, airingIdx-1); };
+$('btnNext').onclick=()=>{ if(airingId && airingCount && airingIdx<airingCount-1) playFrom(airingId, airingIdx+1); };
+
+// --- Output (local OR one cast speaker, mutually exclusive) ---
+async function loadTargets(){
+  const tick=tickerFor($('outMsg'),20000); tick.set('scanning for speakers');
   try{
     const list=await (await fetch(BASE+'/api/cast/devices',{signal:tick.signal})).json();
     if(list.error) throw new Error(list.error);
-    const sel=$('castPick'); const prev=sel.value; sel.innerHTML='';
+    const sel=$('target'); const prev=sel.value; sel.innerHTML='';
+    const o0=document.createElement('option'); o0.value='local'; o0.textContent='This device (play here)';
+    sel.appendChild(o0);
     list.forEach(d=>{
-      const o=document.createElement('option');
-      o.value=d.uuid;
-      o.textContent=d.name+' ('+(d.type==='group'?'group':d.type)+')';
-      sel.appendChild(o);
+      const o=document.createElement('option'); o.value=d.uuid;
+      o.textContent=d.name+' ('+(d.type==='group'?'group':d.type)+')'; sel.appendChild(o);
     });
-    if(prev) sel.value=prev;
-    tick.done(list.length+' devices/groups');
+    sel.value = prev || outputTarget || 'local';
+    tick.done(list.length+' speakers + this device');
   }catch(e){ tick.fail(e); }
 }
-$('btnCast').onclick=async()=>{
-  const uuid=$('castPick').value; if(!uuid) return;
-  const tick=tickerFor($('castMsg'),40000); tick.set('casting');
+
+async function stopCast(uuid){
+  if(!uuid) return;
+  try{ await fetch(BASE+'/api/cast/stop',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({uuid})}); }catch(e){}
+}
+
+// Switch output to `v` ("local" or a cast uuid), stopping whatever was playing
+// before -- only one destination is ever active.
+async function applyTarget(v){
+  const a=$('player');
+  if(v==='local'){
+    if(castUuid){ stopCast(castUuid); castUuid=''; }
+    outputTarget='local';
+    a.src='/stream?ts='+Date.now(); a.load(); a.play().catch(()=>{});
+    $('outMsg').textContent='playing on this device';
+    return;
+  }
+  // casting: stop local audio + any previous speaker, then cast to v
+  a.pause();
+  if(castUuid && castUuid!==v){ stopCast(castUuid); }
+  const tick=tickerFor($('outMsg'),40000); tick.set('casting');
   try{
     const r=await (await fetch(BASE+'/api/cast/start',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({uuid}),signal:tick.signal})).json();
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({uuid:v}),signal:tick.signal})).json();
     if(r.error) throw new Error(r.error);
-    if(r.state==='PLAYING'||r.state==='BUFFERING') tick.done('casting to '+esc(r.name)+' ('+r.state.toLowerCase()+')');
-    else tick.done('could not cast'+(r.hint?': '+esc(r.hint):' (state '+esc(r.state||'?')+')'));
+    if(r.state==='PLAYING'||r.state==='BUFFERING'){ outputTarget=v; castUuid=v;
+      tick.done('casting to '+esc(r.name)+' ('+r.state.toLowerCase()+')'); }
+    else { tick.done('could not cast'+(r.hint?': '+esc(r.hint):' (state '+esc(r.state||'?')+')')); }
   }catch(e){ tick.fail(e); }
+}
+
+$('btnOut').onclick=()=>applyTarget($('target').value);
+$('btnOutStop').onclick=async()=>{
+  const a=$('player'); a.pause();
+  if(castUuid){ const tick=tickerFor($('outMsg'),30000); tick.set('stopping'); await stopCast(castUuid); castUuid=''; tick.done('stopped'); }
+  else { $('outMsg').textContent='stopped'; }
+  outputTarget='';
 };
-$('btnCastStop').onclick=async()=>{
-  const uuid=$('castPick').value; if(!uuid) return;
-  const tick=tickerFor($('castMsg'),30000); tick.set('stopping');
-  try{
-    await fetch(BASE+'/api/cast/stop',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({uuid}),signal:tick.signal});
-    tick.done('stopped');
-  }catch(e){ tick.fail(e); }
-};
-$('btnCastRescan').onclick=loadCastDevices;
+$('btnRescan').onclick=loadTargets;
+// The native <audio> play control is also an output surface: starting local
+// playback must stop any cast so only one destination is ever live.
+$('player').addEventListener('play',()=>{
+  if(castUuid){ stopCast(castUuid); castUuid=''; $('outMsg').textContent='playing on this device'; }
+  outputTarget='local'; $('target').value='local';
+});
 
 (async function init(){
   await loadPicker();
   await poll();
-  loadCastDevices();  // slow (~8s discovery); runs in the background
+  loadTargets();  // slow (~8s discovery); runs in the background
   setInterval(poll, 4000);
+  setInterval(tickElapsed, 1000);
   setInterval(loadPicker, 20000);
 })();
 </script>

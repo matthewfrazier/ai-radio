@@ -205,20 +205,29 @@ def run_segment(seg, bdir, sink):
         proc.wait()
 
 
+FILLER_GAP_S = 15  # trailing silence after each bumper so the -stream_loop
+                   # repeat leaves a long pause instead of nagging back-to-back.
+
+
 def _ensure_filler_wav(text):
     # espeak-ng renders the bumper once per distinct text; cache on disk so a
     # cutover doesn't pay TTS latency (it must start feeding the sink NOW).
+    # Keyed on text+gap so changing either regenerates.
     marker = FILLER_WAV + ".txt"
+    key = "%s\n%d" % (text, FILLER_GAP_S)
     try:
         with open(marker) as f:
-            if f.read() == text and os.path.exists(FILLER_WAV):
+            if f.read() == key and os.path.exists(FILLER_WAV):
                 return FILLER_WAV
     except OSError:
         pass
-    subprocess.run(["espeak-ng", "-w", FILLER_WAV, text],
-                   check=True, capture_output=True)
+    raw = FILLER_WAV + ".raw.wav"
+    subprocess.run(["espeak-ng", "-w", raw, text], check=True, capture_output=True)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", raw,
+                    "-af", "apad=pad_dur=%d" % FILLER_GAP_S, FILLER_WAV], check=True)
+    os.remove(raw)
     with open(marker, "w") as f:
-        f.write(text)
+        f.write(key)
     return FILLER_WAV
 
 
