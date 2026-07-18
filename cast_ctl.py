@@ -61,23 +61,24 @@ def cmd_start(target_uuid, url, ctype):
     mc = cc.media_controller
     mc.play_media(url, content_type=ctype, stream_type="LIVE", title="ai-radio")
     mc.block_until_active(timeout=DISCOVERY_TIMEOUT)
-    # poll briefly for the player to accept the media (BUFFERING/PLAYING) vs
-    # reject it (IDLE with an error) -- this is the format-compat signal. Some
-    # receivers load LIVE media but sit in PAUSED (or briefly IDLE) until told
-    # to play, so nudge play() once when we see that, otherwise the caller gets
-    # a spurious "could not cast (state PAUSED)".
-    nudged = False
+    # poll for the player to accept the media (BUFFERING/PLAYING). Receivers
+    # load LIVE media but sit in PAUSED/IDLE for ~1s until told to play, and a
+    # single early play() fires before the receiver is ready and is silently
+    # dropped -- leaving it stuck IDLE (the "could not cast (state IDLE)" bug).
+    # So nudge play() on EVERY idle/paused poll until it starts. A real load
+    # failure (IDLE + idle_reason=ERROR) can't be nudged out of -- stop early.
     state = mc.status.player_state
-    for _ in range(32):
+    for _ in range(40):
         state = mc.status.player_state
         if state in ("PLAYING", "BUFFERING"):
             break
-        if state in ("PAUSED", "IDLE") and not nudged:
+        if state == "IDLE" and mc.status.idle_reason == "ERROR":
+            break
+        if state in ("PAUSED", "IDLE"):
             try:
                 mc.play()
             except Exception:
                 pass
-            nudged = True
         time.sleep(0.25)
     result = {"uuid": target_uuid, "name": cc.name, "state": state,
               "idle_reason": mc.status.idle_reason}
@@ -87,6 +88,9 @@ def cmd_start(target_uuid, url, ctype):
         # LAUNCH_ERROR NOT_ALLOWED); cast to the group instead.
         result["state"] = "failed"
         result["hint"] = "cast not allowed on this endpoint -- if it's a group member, cast to its group"
+    elif state == "IDLE" and mc.status.idle_reason == "ERROR":
+        result["state"] = "failed"
+        result["hint"] = "the device could not play the stream (reachable? format?) -- try again or Rescan"
     _stop_browser(browser)
     return result
 
