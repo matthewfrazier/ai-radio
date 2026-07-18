@@ -20,6 +20,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import block_presets  # noqa: E402
 import block_render  # noqa: E402
 import day_program  # noqa: E402
 import hour_templates  # noqa: E402
@@ -324,6 +325,36 @@ class SelectiveRenderTests(unittest.TestCase):
         rl.assert_called_once()
         rm.assert_called_once()
         self.assertEqual(rt.call_count, 2)            # weather + recap
+
+
+class BlockPresetsTests(unittest.TestCase):
+    """The three /now construction presets build the expected segment shapes."""
+
+    def test_menu_ids(self):
+        self.assertEqual({p["id"] for p in block_presets.preset_menu()},
+                         {"news_talk", "brief_music", "all_music"})
+
+    def test_news_talk_no_music_voice_propagates(self):
+        segs = block_presets.build_preset("news_talk", {"voice": "am_x"})
+        self.assertFalse(any(s["type"] == "music" for s in segs))
+        self.assertTrue(any(s["type"] == "live" for s in segs))
+        self.assertTrue(all(s["params"]["voice"] == "am_x" for s in segs if s["type"] == "tts"))
+
+    def test_brief_music_two_25min_sets(self):
+        segs = block_presets.build_preset("brief_music", {"genre_1": "jazz", "genre_2": "soul"})
+        music = [s for s in segs if s["type"] == "music"]
+        self.assertEqual([s["params"]["duration_s"] for s in music], [1500, 1500])
+        self.assertEqual([s["params"]["query"] for s in music], ["jazz", "soul"])
+
+    def test_all_music_weather_every_half_hour(self):
+        segs = block_presets.build_preset("all_music", {"genre_1": "ambient"})
+        weathers = [s for s in segs if s["params"].get("topic") == "weather"]
+        self.assertEqual(len(weathers), 2)
+        self.assertTrue(all(s["params"]["duration_s"] == 1800 for s in segs if s["type"] == "music"))
+
+    def test_unknown_preset_raises(self):
+        with self.assertRaises(ValueError):
+            block_presets.build_preset("nope", {})
 
 
 class MusicMetadataTests(unittest.TestCase):

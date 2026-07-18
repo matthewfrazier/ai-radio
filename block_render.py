@@ -129,8 +129,24 @@ def list_blocks():
         est_duration = sum(s["params"].get("duration_s", 0) for s in b["segments"] if s["type"] != "tts")
         out.append({"id": b["id"], "title": b["title"], "created_at": b["created_at"],
                      "updated_at": b["updated_at"], "segment_count": len(b["segments"]),
-                     "schedule": b["schedule"], "est_duration_s": est_duration})
+                     "schedule": b["schedule"], "est_duration_s": est_duration,
+                     "summary": _segment_summary(b["segments"])})
     return out
+
+
+def _segment_summary(segments):
+    """Short human breakdown for the block-list cards, e.g. 'weather · 2 music
+    · recap' -- the ordered role/topic gist without the full segment dump."""
+    parts = []
+    for s in segments:
+        p = s.get("params") or {}
+        if s["type"] == "tts":
+            parts.append(p.get("topic") or "tts")
+        elif s["type"] == "music":
+            parts.append(p.get("query") or "music")
+        elif s["type"] == "live":
+            parts.append("news")
+    return " · ".join(parts)
 
 
 def load_block(block_id):

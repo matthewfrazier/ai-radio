@@ -51,6 +51,21 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
 #target{flex:1;min-width:11rem}
 .mb4{margin:0 0 .4rem}
+.blocklist{display:flex;flex-direction:column;gap:.4rem;max-height:15rem;overflow:auto;margin-bottom:.6rem}
+.bcard{border:1px solid #8884;border-radius:10px;padding:.5rem .65rem;cursor:pointer;background:rgba(128,128,128,.04)}
+.bcard:hover{border-color:#3b82f680}
+.bcard.sel{border-color:#3b82f6;background:rgba(59,130,246,.08)}
+.bcard.airing{border-color:#22c55e}
+.bcard .bt{font-weight:600;display:flex;gap:.4rem;align-items:center}
+.bcard .bs{font-size:.78rem;opacity:.75;margin-top:.2rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.edithead{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;margin:.2rem 0 .5rem}
+.edithead input.title{flex:1;min-width:9rem}
+.seg .fields{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.4rem}
+.seg .fields label{font-size:.72rem;opacity:.7;display:flex;flex-direction:column;gap:.15rem}
+.seg .fields input,.seg .fields select{padding:.3rem .4rem;font-size:.82rem}
+.seg .segctl{margin-left:auto;display:flex;gap:.25rem}
+.seg .segctl button{padding:.2rem .5rem;font-size:.8rem}
+.mini{padding:.35rem .7rem;font-size:.8rem}
 .runlog{font:.72rem/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;background:#8881;border-radius:8px;padding:.5rem .6rem;max-height:14rem;overflow:auto}
 .runlog .lt{opacity:.55;margin-right:.5rem}
 .runlog .k{color:#3b82f6}
@@ -90,11 +105,25 @@ button:disabled{opacity:.4;cursor:not-allowed}
 </section>
 
 <section>
+  <div class="hd2"><h2>Build a block</h2></div>
+  <div class="sub mb4">Auto-generate a starting block from a preset, then edit its segments below.</div>
+  <div class="row">
+    <select id="preset"></select>
+    <input id="genre1" placeholder="genre 1 (e.g. jazz)">
+    <input id="genre2" placeholder="genre 2">
+    <button id="btnBuild" type="button">Create</button>
+  </div>
+  <div class="sub" id="buildMsg"></div>
+</section>
+
+<section>
   <div class="hd2"><h2>Blocks</h2></div>
-  <div class="sub mb4">Pick a block to inspect; press ▶ on any segment to cut the station over and start from there (restart &amp; scrub).</div>
-  <select id="pick"></select>
+  <div class="sub mb4">Tap a block to inspect &amp; edit; ▶ on a segment cuts the station over there (restart &amp; scrub).</div>
+  <div id="blockList" class="blocklist"></div>
+  <div id="editHead"></div>
   <div class="sub" id="switchMsg"></div>
-  <div id="blockView" style="margin-top:.6rem"></div>
+  <div id="blockView"></div>
+  <datalist id="voiceList"></datalist>
 </section>
 
 <section>
@@ -132,66 +161,169 @@ function tickerFor(el,timeoutMs){
 
 function statusDot(st){return st==='ok'?'ok':(st==='error'?'bad':'');}
 
-function segEntity(seg, blockId, airing, idx){
-  const r=seg.resolved||{}, p=seg.params||{};
-  let detail='';
-  if(seg.type==='live'){
-    detail=`source: ${esc(r.source_id||p.source_id)} &middot; ${esc(p.duration_s||0)}s`
-      +(r.url?`<br><a href="${esc(r.url)}" target="_blank">stream url</a> &middot; ${esc(r.title||'')}`:'');
-  } else if(seg.type==='music'){
-    detail=`${esc(r.title||p.query||'shuffle')} &middot; ${esc(r.track_count||0)} tracks &middot; ${esc(p.duration_s||0)}s`
-      +(r.tracks_head&&r.tracks_head.length?`<div class="tracks">${r.tracks_head.slice(0,8).map(esc).join(' &middot; ')}${r.tracks_head.length>8?' …':''}</div>`:'');
-  } else if(seg.type==='tts'){
-    detail=`topic: ${esc(p.topic||'?')}${r.duration_s?(' &middot; '+esc(Math.round(r.duration_s))+'s'):''}${r.rendered_at?(' &middot; rendered '+esc(r.rendered_at.slice(11,19))):''}`
-      +(r.text?`<div class="quote">${esc(r.text)}</div>`:'')
-      +(r.audio_path?`<a href="${BASE}/api/blocks/${esc(blockId)}/audio/${esc(seg.id)}" target="_blank">audio</a>`:'');
+let curBlock=null, voiceOpts=[];   // block being edited (working copy) + voices
+
+function segFields(seg, i){
+  const p=seg.params||{}, mins=v=>Math.round((v||0)/60);
+  if(seg.type==='tts'){
+    const topic=p.topic||'freeform';
+    let f=`<label>topic<select data-f="topic" data-i="${i}">`
+      +['weather','recap','factoid','freeform'].map(t=>`<option${t===topic?' selected':''}>${t}</option>`).join('')
+      +`</select></label>`
+      +`<label>voice<input data-f="voice" data-i="${i}" list="voiceList" value="${esc(p.voice||'')}" placeholder="default"></label>`;
+    if(topic==='weather') f+=`<label>location<input data-f="location" data-i="${i}" value="${esc(p.location||'')}" placeholder="zip / city"></label>`;
+    if(topic==='freeform') f+=`<label>prompt<input data-f="prompt" data-i="${i}" value="${esc(p.prompt||'')}"></label>`;
+    return f;
   }
-  const title = r.title || p.topic || p.query || p.source_id || seg.id;
+  if(seg.type==='music'){
+    return `<label>genre / search<input data-f="query" data-i="${i}" value="${esc(p.query||'')}" placeholder="shuffle all"></label>`
+      +`<label>minutes<input data-f="duration_s" data-i="${i}" type="number" min="1" value="${mins(p.duration_s)}"></label>`;
+  }
+  if(seg.type==='live'){
+    return `<label>source<input data-f="source_id" data-i="${i}" value="${esc(p.source_id||'auto')}"></label>`
+      +`<label>minutes<input data-f="duration_s" data-i="${i}" type="number" min="1" value="${mins(p.duration_s)}"></label>`;
+  }
+  return '';
+}
+
+function segEntity(seg, airing, idx){
+  const r=seg.resolved||{}, p=seg.params||{};
+  const title = r.title || p.topic || p.query || p.source_id || seg.type;
+  let detail='';
+  if(r.text) detail=`<div class="quote">${esc(r.text)}</div>`;
+  else if(seg.type==='music' && r.tracks_head && r.tracks_head.length)
+    detail=`<div class="tracks">${r.tracks_head.slice(0,6).map(esc).join(' &middot; ')}${r.tracks_head.length>6?' …':''}</div>`;
   return `<div class="seg${airing?' airing':''}">
       <div class="hd">
         <span class="dot ${statusDot(seg.status)}" title="${esc(seg.status||'unresolved')}"></span>
-        ${seg.role?`<span class="badge role">${esc(seg.role)}</span>`:''}
         <span class="badge">${esc(seg.type)}</span>
         <span class="name">${esc(title)}</span>
         ${airing?'<span class="badge" style="background:#22c55e33;color:#22c55e">▶ airing</span>':''}
-        <button class="play" data-play="${idx}" title="cut over &amp; start from this segment">▶ play</button>
+        <span class="segctl">
+          <button class="ghost mini" data-play="${idx}" title="cut over here">▶</button>
+          <button class="ghost mini" data-mv="-1" data-i="${idx}" title="move up">↑</button>
+          <button class="ghost mini" data-mv="1" data-i="${idx}" title="move down">↓</button>
+          <button class="danger mini" data-del="${idx}" title="remove">✕</button>
+        </span>
       </div>
+      <div class="fields">${segFields(seg, idx)}</div>
       <div class="detail">${detail}</div>
       ${seg.error?`<div class="detail" style="color:#ef4444">error: ${esc(seg.error)}</div>`:''}
-      <span class="dbg" data-dbg>debug ⌄</span>
-      <pre hidden>${esc(JSON.stringify(seg,null,2))}</pre>
     </div>`;
 }
 
-async function loadBlock(id){
-  if(!id){ $('blockView').innerHTML=''; return; }
-  let b;
-  try{ b=await (await fetch(BASE+'/api/blocks/'+id)).json(); }
-  catch(e){ $('blockView').textContent='load failed'; return; }
-  const head=`<div class="sub">${esc(b.title)} &middot; ${esc(b.id)} &middot; ${b.segments.length} segments &middot; ${esc(b.schedule?b.schedule.state:'')}</div>`;
-  const airing = (b.id===airingId);
-  $('blockView').innerHTML = head + b.segments.map((s,i)=>segEntity(s, b.id, airing && i===airingIdx, i)).join('');
-  $('blockView').querySelectorAll('[data-dbg]').forEach(el=>{
-    el.onclick=()=>{const pre=el.nextElementSibling; pre.hidden=!pre.hidden; el.textContent=pre.hidden?'debug ⌄':'debug ⌃';};
-  });
-  $('blockView').querySelectorAll('[data-play]').forEach(el=>{
-    el.onclick=()=>playFrom(b.id, parseInt(el.dataset.play,10));
-  });
+async function loadList(){
+  const list=await (await fetch(BASE+'/api/blocks')).json();
+  $('blockList').innerHTML = list.length ? list.map(b=>{
+    const st=b.schedule?b.schedule.state:'';
+    const cls='bcard'+(b.id===picked?' sel':'')+(b.id===airingId?' airing':'');
+    const tag=b.id===airingId?'<span class="badge" style="background:#22c55e33;color:#22c55e">airing</span>':`<span class="badge">${esc(st)}</span>`;
+    return `<div class="${cls}" data-bid="${esc(b.id)}">
+      <div class="bt">${esc(b.title)} <span class="badge">${b.segment_count} seg</span> ${tag}</div>
+      <div class="bs">${esc(b.summary||'')}</div></div>`;
+  }).join('') : '<span class="sub">no blocks yet — build one above</span>';
+  $('blockList').querySelectorAll('[data-bid]').forEach(el=>{ el.onclick=()=>inspect(el.dataset.bid); });
 }
 
-async function loadPicker(){
-  const list=await (await fetch(BASE+'/api/blocks')).json();
-  const sel=$('pick'); const prev=sel.value;
-  sel.innerHTML='<option value="">— pick a block —</option>'
-    + list.map(b=>`<option value="${esc(b.id)}">${esc(b.title)} (${b.segment_count} seg &middot; ${esc(b.schedule.state)})</option>`).join('');
-  if(prev) sel.value=prev;
+async function inspect(id){
+  picked=id;
+  try{ curBlock=await (await fetch(BASE+'/api/blocks/'+id)).json(); }
+  catch(e){ $('blockView').textContent='load failed'; return; }
+  loadList(); renderEditor();
 }
-// Picking a block only INSPECTS it now -- the actual cutover is per-segment
-// via the ▶ buttons (playFrom). The poll sets the dropdown value
-// programmatically, which does not fire onchange, so auto-reflecting the
-// airing block never triggers a load loop.
-function inspect(id){ picked=id; loadBlock(id); }
-$('pick').onchange=()=>inspect($('pick').value);
+
+function renderEditor(){
+  if(!curBlock){ $('editHead').innerHTML=''; $('blockView').innerHTML=''; return; }
+  const b=curBlock, airing=(b.id===airingId);
+  $('editHead').className='edithead';
+  $('editHead').innerHTML=`<input class="title" id="btitle" value="${esc(b.title)}">
+    <button class="ghost mini" data-add="tts" type="button">+ tts</button>
+    <button class="ghost mini" data-add="music" type="button">+ music</button>
+    <button class="ghost mini" data-add="live" type="button">+ news</button>
+    <button class="mini" id="btnSave" type="button">Save</button>
+    <button class="ghost mini" id="btnSaveAs" type="button">Save as new</button>`;
+  $('blockView').innerHTML = b.segments.map((s,i)=>segEntity(s, airing&&i===airingIdx, i)).join('');
+  wireEditor();
+}
+
+function wireEditor(){
+  const bv=$('blockView');
+  bv.querySelectorAll('[data-f]').forEach(el=>{
+    el.onchange=()=>{
+      const i=+el.dataset.i, f=el.dataset.f; let v=el.value;
+      if(f==='duration_s') v=Math.max(1,parseInt(v||'1',10))*60;
+      curBlock.segments[i].params[f]=v;
+      if(f==='topic') renderEditor();  // topic change swaps the visible fields
+    };
+  });
+  bv.querySelectorAll('[data-play]').forEach(el=>{ el.onclick=()=>playFrom(curBlock.id, +el.dataset.play); });
+  bv.querySelectorAll('[data-del]').forEach(el=>{ el.onclick=()=>{ curBlock.segments.splice(+el.dataset.del,1); renderEditor(); }; });
+  bv.querySelectorAll('[data-mv]').forEach(el=>{ el.onclick=()=>moveSeg(+el.dataset.i, +el.dataset.mv); });
+  $('editHead').querySelectorAll('[data-add]').forEach(el=>{ el.onclick=()=>addSeg(el.dataset.add); });
+  $('btitle').onchange=()=>{ curBlock.title=$('btitle').value; };
+  $('btnSave').onclick=saveBlock;
+  $('btnSaveAs').onclick=saveAsBlock;
+}
+
+function moveSeg(i,dir){
+  const j=i+dir, s=curBlock.segments; if(j<0||j>=s.length) return;
+  [s[i],s[j]]=[s[j],s[i]]; renderEditor();
+}
+
+let addCount=0;
+function addSeg(type){
+  const id=type+'_'+(++addCount)+'_'+Date.now().toString(36);
+  const params=type==='tts'?{topic:'weather',location:'',voice:'',ttl_s:1800}
+    :type==='music'?{query:'',duration_s:900}:{source_id:'auto',duration_s:300};
+  curBlock.segments.push({id, role:id, type, params}); renderEditor();
+}
+
+// Strip resolved/status on save so edited segments re-resolve fresh at air.
+function cleanSegs(){
+  return curBlock.segments.map(s=>({id:s.id, role:s.role||s.id, type:s.type, params:s.params}));
+}
+async function saveBlock(){
+  const tick=tickerFor($('switchMsg'),20000); tick.set('saving');
+  try{
+    const r=await fetch(BASE+'/api/blocks/'+curBlock.id,{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({title:curBlock.title, segments:cleanSegs()}),signal:tick.signal});
+    if(!r.ok) throw new Error((await r.text())||('HTTP '+r.status));
+    tick.done('saved'); await inspect(curBlock.id);
+  }catch(e){ tick.fail(e); }
+}
+async function saveAsBlock(){
+  const tick=tickerFor($('switchMsg'),20000); tick.set('saving as new');
+  try{
+    const b=await (await fetch(BASE+'/api/blocks/save_as',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({title:curBlock.title+' (copy)', segments:cleanSegs()}),signal:tick.signal})).json();
+    if(b.error) throw new Error(b.error);
+    tick.done('created '+b.title); inspect(b.id);
+  }catch(e){ tick.fail(e); }
+}
+
+async function loadBuild(){
+  const presets=await (await fetch(BASE+'/api/presets')).json();
+  $('preset').innerHTML=presets.map(p=>`<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');
+  try{
+    const engines=await (await fetch(BASE+'/api/tts_engines')).json();
+    const k=(engines||[]).find(e=>e.id==='kokoro');
+    voiceOpts=(k&&k.voices)||[];
+    $('voiceList').innerHTML=voiceOpts.map(v=>`<option value="${esc(v)}">`).join('');
+  }catch(e){}
+}
+$('btnBuild').onclick=async()=>{
+  const tick=tickerFor($('buildMsg'),25000); tick.set('creating block');
+  try{
+    const opts={genre_1:$('genre1').value, genre_2:$('genre2').value};
+    const b=await (await fetch(BASE+'/api/blocks/preset',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({preset:$('preset').value, opts}),signal:tick.signal})).json();
+    if(b.error) throw new Error(b.error);
+    tick.done('created '+b.title); inspect(b.id);
+  }catch(e){ tick.fail(e); }
+};
 
 // Cut the station over to block `id` starting at segment `idx` (restart/scrub).
 // The player keeps the Icecast source fed with a spoken filler across the
@@ -314,7 +446,7 @@ async function poll(){
     $('listeners').textContent=s.live?('· '+(s.listeners||0)+' listening'):'';
     $('stitle').textContent=s.title?('“'+s.title+'”'):'';
     const st=n.state||{};
-    const prevIdx=airingIdx;
+    const prevIdx=airingIdx, prevA=airingId;
     airingId=n.player_active?(st.block_id||''):'';
     airingIdx=n.player_active&&st.segment_index!=null?st.segment_index:-1;
     airingCount=st.segment_count||0;
@@ -325,9 +457,9 @@ async function poll(){
     if(!n.player_active || !st.block_id) airingStartedMs=0;
     renderNow(n);
     $('queue').textContent = (n.queue&&n.queue.length)?('Queue: '+n.queue.join(', ')):'Queue empty.';
-    // if a block is airing and nothing is picked, show it
-    if(airingId && !picked){ $('pick').value=airingId; picked=airingId; loadBlock(picked); }
-    else if(picked===airingId) loadBlock(picked); // refresh airing highlight
+    // refresh the block-list highlight when the airing block changes (never
+    // reload the editor -- that would clobber in-progress edits).
+    if(airingId!==prevA) loadList();
   }catch(e){}
 }
 
@@ -425,14 +557,16 @@ $('player').addEventListener('play',()=>{
 });
 
 (async function init(){
-  await loadPicker();
+  await loadBuild();
+  await loadList();
   await poll();
+  if(airingId && !picked) inspect(airingId);  // open the airing block once
   loadTargets();  // cached device list -> instant; Rescan forces a fresh scan
   loadLog();
   setInterval(poll, 4000);
   setInterval(tickElapsed, 1000);
   setInterval(loadLog, 5000);
-  setInterval(loadPicker, 20000);
+  setInterval(loadList, 20000);
 })();
 </script>
 </body></html>"""

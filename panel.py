@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 from tts_engines import kokoro_voices, kokoro_speech
+import block_presets
 import block_render
 import blocks_page
 import day_page
@@ -589,6 +590,8 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, "application/json", json.dumps(now_state()).encode())
                 if route == ["log"]:
                     return self._send(200, "application/json", json.dumps(player_log()).encode())
+                if route == ["presets"]:
+                    return self._send(200, "application/json", json.dumps(block_presets.preset_menu()).encode())
                 if route == ["cast", "devices"]:
                     refresh = parse_qs(u.query).get("refresh", ["0"])[0] in ("1", "true")
                     return self._send(200, "application/json", json.dumps(cast_devices(refresh)).encode())
@@ -739,6 +742,22 @@ class H(BaseHTTPRequestHandler):
                 if route == ["llm_test"]:
                     text = llm_backends.generate(body["backend"], body["model"], body["prompt"])
                     return self._send(200, "application/json", json.dumps({"text": text}).encode())
+                if route == ["blocks", "preset"]:
+                    preset = body.get("preset", "")
+                    if preset not in block_presets.PRESETS:
+                        return self._send(400, "text/plain", ("unknown preset: %s" % preset).encode())
+                    cfg = block_render.load_station_cfg()
+                    opts = dict(body.get("opts") or {})
+                    opts.setdefault("weather_location", cfg.get("weather_location", ""))
+                    opts.setdefault("voice", cfg.get("voice", ""))
+                    opts.setdefault("llm_backend", cfg.get("recap_llm_backend", ""))
+                    opts.setdefault("llm_model", cfg.get("recap_llm_model", ""))
+                    segs = block_presets.build_preset(preset, opts)
+                    label = block_presets.PRESETS[preset]["label"]
+                    title = body.get("title") or ("%s · %s" % (label, datetime.now().strftime("%b %-d %H:%M")))
+                    block = block_render.create_block_from_segments(
+                        title, segs, template={"name": preset, "preset": True})
+                    return self._send(200, "application/json", json.dumps(block).encode())
                 if route == ["blocks", "from_template"]:
                     template = body.get("template", "standard_hour")
                     builder = hour_templates.TEMPLATES.get(template)
@@ -749,6 +768,11 @@ class H(BaseHTTPRequestHandler):
                     title = body.get("title") or ("%s %02d:00" % (template, hour))
                     block = block_render.create_block_from_segments(
                         title, segs, template={"name": template, "hour": hour})
+                    return self._send(200, "application/json", json.dumps(block).encode())
+                if route == ["blocks", "save_as"]:
+                    # Clone the (edited) segments into a fresh auto-named block.
+                    title = body.get("title") or ("Block · " + datetime.now().strftime("%b %-d %H:%M"))
+                    block = block_render.create_block_from_segments(title, body.get("segments", []))
                     return self._send(200, "application/json", json.dumps(block).encode())
                 if route == ["blocks"]:
                     return self._send(200, "application/json", json.dumps(block_render.create_block(body.get("title", ""))).encode())
