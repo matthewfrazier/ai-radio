@@ -23,6 +23,7 @@ import json
 import os
 import signal
 import subprocess
+import threading
 import time
 
 import block_render as br
@@ -31,6 +32,7 @@ BASE = "/opt/writ-fm"
 FIFO_PATH = os.path.join(BASE, ".block_sink.fifo")
 STUBENV = os.path.join(BASE, ".stubenv")
 STATE_FILE = os.path.join(BASE, "player_state.json")
+FILLER_WAV = os.path.join(BASE, ".cutover_filler.wav")
 
 _stop_requested = False
 _skip_block = False
@@ -203,6 +205,69 @@ def run_segment(seg, bdir, sink):
         proc.wait()
 
 
+def _ensure_filler_wav(text):
+    # espeak-ng renders the bumper once per distinct text; cache on disk so a
+    # cutover doesn't pay TTS latency (it must start feeding the sink NOW).
+    marker = FILLER_WAV + ".txt"
+    try:
+        with open(marker) as f:
+            if f.read() == text and os.path.exists(FILLER_WAV):
+                return FILLER_WAV
+    except OSError:
+        pass
+    subprocess.run(["espeak-ng", "-w", FILLER_WAV, text],
+                   check=True, capture_output=True)
+    with open(marker, "w") as f:
+        f.write(text)
+    return FILLER_WAV
+
+
+def _filler_cmd(cfg):
+    # A short-lived producer whose PCM keeps the persistent sink fed during the
+    # air-time render gap (otherwise Icecast underruns and Cast receivers quit,
+    # never reconnecting). -re paces it to real time to match music producers.
+    base = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin", "-re"]
+    tail = ["-f", "s16le", "-ar", "44100", "-ac", "2", "-"]
+    if cfg.get("cutover_filler", True):
+        try:
+            wav = _ensure_filler_wav(cfg.get("cutover_filler_text") or "One moment.")
+            return base + ["-stream_loop", "-1", "-i", wav] + tail
+        except Exception as e:
+            log("filler tts failed (%s), using silence" % e)
+    return base + ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"] + tail
+
+
+def render_with_filler(block_id, sink, cfg):
+    # Render (re-resolve live/music, re-render recap/factoid TTS) in a thread
+    # while the main loop pushes filler audio into the sink, so the stream
+    # never stalls across the several-second render. Returns the rendered block
+    # or re-raises the render's exception (caller drops the block on failure).
+    result = {}
+
+    def _do():
+        try:
+            result["block"] = br.render_block(block_id, force=False)
+        except Exception as e:  # noqa: BLE001 -- surfaced to caller below
+            result["error"] = e
+
+    t = threading.Thread(target=_do)
+    t.start()
+    proc = subprocess.Popen(_filler_cmd(cfg), stdout=subprocess.PIPE)
+    try:
+        while t.is_alive() and not _stop_requested:
+            chunk = proc.stdout.read(65536)
+            if not chunk:
+                break
+            sink.write(chunk)
+    finally:
+        proc.terminate()
+        proc.wait()
+        t.join()
+    if "error" in result:
+        raise result["error"]
+    return result["block"]
+
+
 def open_sink(srcpw, attempts=25, delay=0.2):
     # Tolerate the Icecast mount-release lag during a fallback<->player
     # handoff: systemd's Conflicts= stops the other source, but the mount may
@@ -233,19 +298,25 @@ def main():
                 log("queue drained")
                 break
             block_id = queue[0]
+            cfg = br.load_station_cfg()
             try:
-                block = br.render_block(block_id, force=False)  # re-resolve/re-render at AIR time
+                # re-resolve/re-render at AIR time, feeding filler to the sink
+                # so the stream doesn't underrun during the render.
+                block = render_with_filler(block_id, sink, cfg)
             except Exception as e:
                 log("render failed for %s (%s), dropping" % (block_id, e))
                 br.pop_front(block_id)
                 continue
             bdir = br.block_dir(block_id)
             nsegs = len(block["segments"])
-            log("airing block %s (%d segments)" % (block_id, nsegs))
+            start_index = br.take_cutover(block_id)  # per-segment ▶ / scrub
+            log("airing block %s (%d segments, from %d)" % (block_id, nsegs, start_index))
             _skip_block = False
             for i, seg in enumerate(block["segments"]):
                 if _stop_requested or _skip_block:
                     break
+                if i < start_index:
+                    continue
                 log("segment %s %s" % (seg.get("type"), seg.get("id")))
                 write_state({"block_id": block_id, "title": block.get("title"),
                              "segment_count": nsegs, "segment_index": i,

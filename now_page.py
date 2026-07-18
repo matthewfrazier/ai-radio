@@ -27,6 +27,8 @@ a{color:#3b82f6}
 .seg.airing{border-color:#22c55e;background:rgba(34,197,94,.10)}
 .seg .hd{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
 .seg .name{font-weight:600;overflow:hidden;text-overflow:ellipsis}
+.seg .play{margin-left:auto;font:inherit;font-size:.8rem;padding:.2rem .6rem;border:1px solid #3b82f680;border-radius:999px;background:transparent;color:#3b82f6;cursor:pointer}
+.seg.airing .play{border-color:#22c55e;color:#22c55e}
 .seg .detail{font-size:.82rem;opacity:.9;margin-top:.35rem}
 .seg .quote{border-left:3px solid #8886;padding-left:.6rem;margin:.4rem 0;font-style:italic;opacity:.85}
 .tracks{font-size:.8rem;opacity:.85;margin-top:.3rem}
@@ -66,9 +68,10 @@ pre{white-space:pre-wrap;background:#8881;padding:.6rem;border-radius:8px;font-s
 </section>
 
 <section>
-  <div class="hd2"><h2>Switch block</h2></div>
-  <div class="sub" style="margin:0 0 .4rem">Selecting a block cuts the station over to it now.</div>
+  <div class="hd2"><h2>Blocks</h2></div>
+  <div class="sub" style="margin:0 0 .4rem">Pick a block to inspect; press ▶ on any segment to cut the station over and start from there (restart &amp; scrub).</div>
   <select id="pick"></select>
+  <div class="sub" id="switchMsg"></div>
   <div id="blockView" style="margin-top:.6rem"></div>
 </section>
 
@@ -92,7 +95,7 @@ function tickerFor(el,timeoutMs){
 
 function statusDot(st){return st==='ok'?'ok':(st==='error'?'bad':'');}
 
-function segEntity(seg, blockId, airing){
+function segEntity(seg, blockId, airing, idx){
   const r=seg.resolved||{}, p=seg.params||{};
   let detail='';
   if(seg.type==='live'){
@@ -114,6 +117,7 @@ function segEntity(seg, blockId, airing){
         <span class="badge">${esc(seg.type)}</span>
         <span class="name">${esc(title)}</span>
         ${airing?'<span class="badge" style="background:#22c55e33;color:#22c55e">▶ airing</span>':''}
+        <button class="play" data-play="${idx}" title="cut over &amp; start from this segment">▶ play</button>
       </div>
       <div class="detail">${detail}</div>
       ${seg.error?`<div class="detail" style="color:#ef4444">error: ${esc(seg.error)}</div>`:''}
@@ -129,9 +133,12 @@ async function loadBlock(id){
   catch(e){ $('blockView').textContent='load failed'; return; }
   const head=`<div class="sub">${esc(b.title)} &middot; ${esc(b.id)} &middot; ${b.segments.length} segments &middot; ${esc(b.schedule?b.schedule.state:'')}</div>`;
   const airing = (b.id===airingId);
-  $('blockView').innerHTML = head + b.segments.map((s,i)=>segEntity(s, b.id, airing && i===airingIdx)).join('');
+  $('blockView').innerHTML = head + b.segments.map((s,i)=>segEntity(s, b.id, airing && i===airingIdx, i)).join('');
   $('blockView').querySelectorAll('[data-dbg]').forEach(el=>{
     el.onclick=()=>{const pre=el.nextElementSibling; pre.hidden=!pre.hidden; el.textContent=pre.hidden?'debug ⌄':'debug ⌃';};
+  });
+  $('blockView').querySelectorAll('[data-play]').forEach(el=>{
+    el.onclick=()=>playFrom(b.id, parseInt(el.dataset.play,10));
   });
 }
 
@@ -142,27 +149,31 @@ async function loadPicker(){
     + list.map(b=>`<option value="${esc(b.id)}">${esc(b.title)} (${b.segment_count} seg &middot; ${esc(b.schedule.state)})</option>`).join('');
   if(prev) sel.value=prev;
 }
-// Selecting a block SWITCHES the station to it (play-now) and reconnects the
-// player to the newly-switched live source. Only fires on a real user pick --
-// the poll sets the dropdown's value programmatically, which does not trigger
-// onchange, so auto-reflecting the airing block never causes a cutover.
-async function switchTo(id){
-  picked=id;
-  if(!id){ loadBlock(''); return; }
-  loadBlock(id);
-  if(id===airingId) return;  // already airing -> just inspect, don't re-cut
-  $('now').innerHTML='<span class="sub">switching to <b>'+esc(id)+'</b>… (the new hour renders for a few seconds before audio resumes)</span>';
-  // fire-and-forget with prerender:false so the POST returns immediately; the
-  // player does the single air-time render and the poll shows it airing.
-  fetch(BASE+'/api/blocks/'+id+'/schedule',{method:'POST',
-    headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'now',prerender:false})})
-    .catch(e=>{ $('now').innerHTML='<span class="sub">switch failed: '+esc(e)+'</span>'; });
-  // reconnect the audio to the switched stream (cache-buster forces a fresh
-  // connection so it picks up the new source once its sink is airing).
+// Picking a block only INSPECTS it now -- the actual cutover is per-segment
+// via the ▶ buttons (playFrom). The poll sets the dropdown value
+// programmatically, which does not fire onchange, so auto-reflecting the
+// airing block never triggers a load loop.
+function inspect(id){ picked=id; loadBlock(id); }
+$('pick').onchange=()=>inspect($('pick').value);
+
+// Cut the station over to block `id` starting at segment `idx` (restart/scrub).
+// The player keeps the Icecast source fed with a spoken filler across the
+// air-time render, so a cast stays connected through the switch.
+async function playFrom(id, idx){
+  const tick=tickerFor($('switchMsg'),20000);
+  tick.set('cutting over to segment '+(idx+1));
+  try{
+    const r=await fetch(BASE+'/api/blocks/'+id+'/schedule',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({mode:'now',prerender:false,start_index:idx}),signal:tick.signal});
+    if(!r.ok) throw new Error((await r.text())||('HTTP '+r.status));
+    tick.done('switched — starts at segment '+(idx+1)+' after render');
+  }catch(e){ tick.fail(e); return; }
+  // reconnect the local <audio> to the freshly-switched stream (cast is
+  // independent and rides through). Cache-buster forces a new connection.
   const a=$('player');
   setTimeout(()=>{ a.src='/stream?ts='+Date.now(); a.load(); a.play().catch(()=>{}); }, 5000);
 }
-$('pick').onchange=()=>switchTo($('pick').value);
 
 async function poll(){
   try{

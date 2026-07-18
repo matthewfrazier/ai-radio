@@ -30,6 +30,11 @@ STATION_CFG = os.path.join(BASE, "station.json")
 QUEUE_FILE = os.path.join(BASE, "block_queue.json")
 SCHEDULE_FILE = os.path.join(BASE, "schedule.json")
 STATE_LOCK = os.path.join(BASE, ".state.lock")
+# One-shot "start this block at segment N" hint for the play-now-at-segment
+# action (the /now per-segment ▶ button). The panel writes it just before the
+# cutover; the player consumes+deletes it when it begins the block, so a later
+# natural re-air of the same block starts from the top.
+CUTOVER_FILE = os.path.join(BASE, ".block_cutover.json")
 
 
 @contextlib.contextmanager
@@ -48,7 +53,12 @@ def _state_lock():
     finally:
         os.close(fd)
 
-DEFAULT_STATION_CFG = {"kokoro": "http://192.168.1.74:8880", "voice": "am_michael", "speed": 1.0}
+DEFAULT_STATION_CFG = {"kokoro": "http://192.168.1.74:8880", "voice": "am_michael", "speed": 1.0,
+                       # keep the Icecast source fed during the air-time render gap so
+                       # Cast/clients never underrun; a spoken espeak bumper while debugging
+                       # (set false post-release to fall back to silence). See block_player.
+                       "cutover_filler": True,
+                       "cutover_filler_text": "Operator switching tracks, one moment."}
 DEFAULT_TTS_TTL_S = 1800
 
 # Block ids are always minted by new_block_id() as a timestamp (optionally
@@ -398,6 +408,36 @@ def render_block(block_id, force=False):
             _save_block_unlocked(fresh)
         return fresh
     return block
+
+
+def set_cutover(block_id, start_index=0):
+    """Record a one-shot 'begin this block at segment N' hint for the player's
+    next cutover (the /now per-segment ▶ button). Paired with queue_now(), so
+    the player finds this block at the queue front and consumes the hint."""
+    with _state_lock():
+        tmp = CUTOVER_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"block_id": block_id, "start_index": int(start_index)}, f)
+        os.replace(tmp, CUTOVER_FILE)
+
+
+def take_cutover(block_id):
+    """Consume the cutover hint iff it targets block_id; return its start
+    segment index (0 if none / mismatched). Removing only on match leaves a
+    hint for a not-yet-reached block intact."""
+    with _state_lock():
+        try:
+            with open(CUTOVER_FILE) as f:
+                c = json.load(f)
+        except Exception:
+            return 0
+        if c.get("block_id") != block_id:
+            return 0
+        try:
+            os.remove(CUTOVER_FILE)
+        except OSError:
+            pass
+        return max(0, int(c.get("start_index", 0)))
 
 
 def mark_scheduled(block_id, state):

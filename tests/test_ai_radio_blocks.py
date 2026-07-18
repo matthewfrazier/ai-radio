@@ -170,6 +170,41 @@ class QueuePopTests(unittest.TestCase):
         self.assertEqual(block_render.load_queue(), [])
 
 
+class CutoverHintTests(unittest.TestCase):
+    """The one-shot 'start this block at segment N' hint behind the /now
+    per-segment ▶ play button (play-now-at-segment / scrub)."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        base = self._tmpdir.name
+        self._patchers = [
+            patch.object(block_render, "CUTOVER_FILE", os.path.join(base, ".cutover.json")),
+            patch.object(block_render, "STATE_LOCK", os.path.join(base, ".state.lock")),
+        ]
+        for p in self._patchers:
+            p.start()
+
+    def tearDown(self):
+        for p in self._patchers:
+            p.stop()
+        self._tmpdir.cleanup()
+
+    def test_take_matching_hint_returns_index_and_consumes(self):
+        block_render.set_cutover("blockA", 3)
+        self.assertEqual(block_render.take_cutover("blockA"), 3)
+        # one-shot: a second read (e.g. a later natural re-air) starts at 0
+        self.assertEqual(block_render.take_cutover("blockA"), 0)
+
+    def test_take_mismatched_hint_leaves_it_intact(self):
+        block_render.set_cutover("blockB", 5)
+        self.assertEqual(block_render.take_cutover("blockA"), 0)
+        # the hint for blockB survives an unrelated block airing first
+        self.assertEqual(block_render.take_cutover("blockB"), 5)
+
+    def test_take_without_hint_is_zero(self):
+        self.assertEqual(block_render.take_cutover("blockA"), 0)
+
+
 class RenderMergeTests(unittest.TestCase):
     """render_block resolves outside the lock, then merges only resolution
     fields back onto the *current* on-disk block, so a title/segments edit

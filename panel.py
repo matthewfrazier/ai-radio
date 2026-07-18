@@ -374,7 +374,7 @@ def _cutover_player():
     subprocess.run(["systemctl", "kill", "-s", "HUP", PLAYER_UNIT], capture_output=True)
 
 
-def schedule_block(block_id, mode, prerender=True):
+def schedule_block(block_id, mode, prerender=True, start_index=0):
     # prerender surfaces resolve/render errors in the UI immediately (the
     # /blocks schedule button wants that). The /now live switcher passes
     # prerender=False so the cutover POST returns fast -- the player does the
@@ -383,6 +383,9 @@ def schedule_block(block_id, mode, prerender=True):
     if prerender:
         block_render.render_block(block_id, force=False)
     if mode == "now":
+        # play-now-at-segment: record the start segment before overwriting the
+        # queue so the player begins this block partway in (per-segment ▶ / scrub).
+        block_render.set_cutover(block_id, start_index)
         block_render.queue_now(block_id)  # overwrite: play-now drops the rest of the queue
         if _player_active():
             _cutover_player()
@@ -659,7 +662,8 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, "application/json", json.dumps(result).encode())
                 if len(route) == 3 and route[0] == "blocks" and route[2] == "schedule":
                     result = schedule_block(route[1], body.get("mode", "queue"),
-                                            prerender=body.get("prerender", True))
+                                            prerender=body.get("prerender", True),
+                                            start_index=int(body.get("start_index", 0)))
                     return self._send(200, "application/json", json.dumps(result).encode())
             except FileNotFoundError:
                 return self._send(404, "text/plain", b"not found")
