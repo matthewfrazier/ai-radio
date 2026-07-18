@@ -35,7 +35,21 @@ url + long-lived token to activate/test.
 
 ## live now-playing metadata (real artist/title) from the playlist
 
-**Status:** idea (2026-07-18). Directly reduces recap hallucination.
+**Status:** BUILT 2026-07-18. `resolve_music_segment` captures per-track
+`{name, artist, duration_s}` from Jellyfin (Artists + RunTimeTicks) for the
+tracks that air; the block player infers the current track from bytes written
+(== elapsed audio) and pushes `Artist — Title` as each boundary passes, via
+Icecast `/admin/metadata` (option (a) below). News segments carry the source's
+friendly name. Shows on `/now`, direct listeners, and Cast. Remaining nicety:
+feed the real per-track artist into the recap prompt (tracks_head now holds
+`Artist — Title`, so this is mostly wiring) to close the last recap-accuracy
+slips.
+
+**Original goal.** Emit the actual current track's artist/title so (a) `/now`
+shows the real song playing and (b) recaps/factoids use **real artist metadata
+instead of the LLM inferring the artist from track titles** — the source of the
+only remaining recap-accuracy slips (e.g. "featuring Jay Dunne" on obscure
+tracks).
 
 **Goal.** Emit the actual current track's artist/title so (a) `/now` shows the
 real song playing and (b) recaps/factoids use **real artist metadata instead
