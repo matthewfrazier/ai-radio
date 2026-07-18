@@ -5,8 +5,11 @@ dedicated-host deployment overlay on top of the upstream station engine. Pull
 upstream fixes with `git fetch upstream && git merge upstream/main`.
 
 ## What lives here (overlay, not in upstream)
-- `DAY_PROGRAMMING.md` — the in-design 24h auto-programming vision (standard
-  templated hour, day generator, edit-on-a-24h-horizon experience).
+- `DAY_PROGRAMMING.md` — the 24h auto-programming system (Phases 1–4 built):
+  the standard templated hour (`hour_templates.py`), the day generator
+  (`day_program.py`), and the `/day` timeline create/edit UI (`day_page.py`).
+  AI recap/factoid TTS live in `tts_content.py`. Read this before touching
+  those modules.
 - `BACKLOG.md` — tracked future work (e.g. news-topic distillation → 70s
   research briefs), each item optionally with an investigation agent attached.
 - `PLAN.md` — the prioritized revision plan (P0 safety → P1 reliability → P2

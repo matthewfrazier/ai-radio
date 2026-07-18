@@ -143,8 +143,31 @@ plugin layer, an HTTP framework, or unifying the two inline UI pages.
 4. **day UI** (`/day` + `/api/day/*`), browser-verified.
 5. **polish** — retention/cleanup alignment, docs, coherence + staleness runs.
 
-## Status
+## Status (2026-07-18)
 
-- IA / experience design: **done** (above).
+Phases 1–4 built, verified live, committed. `/day` is the create/edit
+experience; `/blocks` remains the per-segment power editor.
+
+- **P1** recap/factoid AI-TTS topics (deterministic fallback, markdown
+  stripped), `tracks_head`, `source_id:"auto"` disjoint news. Player untouched.
+- **P2** `standard_hour` template (`hour_templates.py`) + `POST
+  /api/blocks/from_template`.
+- **P3** `day_program.generate_day` — 24 deterministic-id blocks + 24 hourly
+  entries, idempotent regen, past-day prune. Queue mode (no scheduler change).
+- **P4** `/day` timeline UI (`day_page.py`) + per-hour role-targeted quick
+  edit + bulk edit (`patch_hour`/`bulk_edit`, `/api/day/*`).
+
+**Operational model (important):** generated schedule entries are *daily
+recurring*, and because music/news/recaps all re-resolve fresh at AIR time, a
+day generated once airs indefinitely with fresh content — **no daily
+regeneration cron is needed**; regenerate only to change the template/genres.
+Referenced blocks are never reclaimed by the cleanup timer while scheduled.
+
+**Remaining (P5 polish, non-blocking):**
+- A coherence listen: actually air a generated hour end-to-end and judge the
+  flow (deferred — would interrupt the live stream; the operator's call).
+- Optional: a second template (e.g. `music_heavy_hour`), a factoid-only
+  segment type, and wiring the news-distillation briefs (`BACKLOG.md`) into
+  the recap/topical slots once that feature is built.
+
 - News-distillation backlog: investigated, Phase-1-ready — see `BACKLOG.md`.
-- Build: Phase 1 in progress.
