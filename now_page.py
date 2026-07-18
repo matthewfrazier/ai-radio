@@ -354,10 +354,15 @@ async function loadLog(){
 }
 
 // --- Output (local OR one cast speaker, mutually exclusive) ---
-async function loadTargets(){
-  const tick=tickerFor($('outMsg'),20000); tick.set('scanning for speakers');
+// force=true is only the Rescan button; a normal load uses the backend's
+// cached device list (no ~8s LAN scan), so refreshing the page -- especially
+// while already casting -- is instant.
+async function loadTargets(force){
+  const tick=tickerFor($('outMsg'),20000);
+  tick.set(force?'rescanning for speakers':'loading speakers');
   try{
-    const list=await (await fetch(BASE+'/api/cast/devices',{signal:tick.signal})).json();
+    const url=BASE+'/api/cast/devices'+(force?'?refresh=1':'');
+    const list=await (await fetch(url,{signal:tick.signal})).json();
     if(list.error) throw new Error(list.error);
     const sel=$('target'); const prev=sel.value; sel.innerHTML='';
     const o0=document.createElement('option'); o0.value='local'; o0.textContent='This device (play here)';
@@ -411,7 +416,7 @@ $('btnOutStop').onclick=async()=>{
   else { $('outMsg').textContent='stopped'; }
   outputTarget='';
 };
-$('btnRescan').onclick=loadTargets;
+$('btnRescan').onclick=()=>loadTargets(true);
 // The native <audio> play control is also an output surface: starting local
 // playback must stop any cast so only one destination is ever live.
 $('player').addEventListener('play',()=>{
@@ -422,7 +427,7 @@ $('player').addEventListener('play',()=>{
 (async function init(){
   await loadPicker();
   await poll();
-  loadTargets();  // slow (~8s discovery); runs in the background
+  loadTargets();  // cached device list -> instant; Rescan forces a fresh scan
   loadLog();
   setInterval(poll, 4000);
   setInterval(tickElapsed, 1000);

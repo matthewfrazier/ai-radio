@@ -17,6 +17,7 @@ Signals: SIGTERM/SIGINT stop cleanly; SIGHUP means "abandon the current
 block and re-read the queue" -- the play-now cutover, which the panel
 triggers after overwriting the queue, avoiding a stop/start writ-stream flap.
 """
+import base64
 import errno
 import fcntl
 import json
@@ -25,6 +26,8 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.parse
+import urllib.request
 
 import block_render as br
 
@@ -73,6 +76,39 @@ def _on_skip(signum, frame):
     _skip_block = True
 
 
+def segment_metadata_title(seg):
+    """A human 'now playing' label for a segment, pushed as the stream title so
+    /now, direct listeners, and the Cast receiver show what's actually airing
+    instead of 'Unspecified name' / 'ai-radio'."""
+    r = seg.get("resolved") or {}
+    p = seg.get("params") or {}
+    t = seg.get("type")
+    if t == "music":
+        q = (p.get("query") or "").strip()
+        return ("%s music" % q.title()) if q else (r.get("title") or "Music")
+    if t == "live":
+        return r.get("title") or p.get("source_id") or "News"
+    if t == "tts":
+        return {"weather": "Weather", "recap": "Station recap",
+                "factoid": "Did you know?"}.get(p.get("topic"), r.get("title") or "Interlude")
+    return r.get("title") or "ai-radio"
+
+
+def push_metadata(srcpw, title):
+    """Update the Icecast /stream title (ICY metadata). Best-effort; a failure
+    never affects playback. Icecast injects this into the MP3 ICY stream, which
+    the browser and the Cast receiver read as the current track title."""
+    try:
+        q = urllib.parse.urlencode({"mount": "/stream", "mode": "updinfo",
+                                    "charset": "UTF-8", "song": title})
+        req = urllib.request.Request("http://127.0.0.1:8000/admin/metadata?" + q)
+        req.add_header("Authorization", "Basic " +
+                       base64.b64encode(("source:%s" % srcpw).encode()).decode())
+        urllib.request.urlopen(req, timeout=3).read()
+    except Exception as e:
+        log("metadata push failed: %s" % e)
+
+
 def load_srcpw():
     with open(STUBENV) as f:
         for line in f:
@@ -91,23 +127,32 @@ def start_sink(srcpw):
     ])
 
 
+# Per-clip loudness normalization (EBU R128 loudnorm, single-pass so it works
+# on live streams too) applied to every producer, so TTS -- previously much
+# quieter -- lands at the same perceived loudness as music and newscasts.
+# -14 LUFS is a common streaming target (near modern music masters, so music
+# barely moves while quiet speech/news come up). Two-pass measured gain per
+# file could replace this later if music ever pumps at the gate.
+NORM_AF = ["-af", "loudnorm=I=-14:TP=-1.5:LRA=11"]
+PCM_OUT = ["-f", "s16le", "-ar", "44100", "-ac", "2", "-"]
+
+
 def segment_cmd(seg, bdir):
     t = seg["type"]
     if t == "live":
         return ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin", "-re",
-                "-t", str(seg["params"]["duration_s"]), "-i", seg["resolved"]["url"],
-                "-f", "s16le", "-ar", "44100", "-ac", "2", "-"]
+                "-t", str(seg["params"]["duration_s"]), "-i", seg["resolved"]["url"]] \
+            + NORM_AF + PCM_OUT
     if t == "tts":
         path = os.path.join(bdir, seg["resolved"]["audio_path"])
         return ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin",
-                "-i", path, "-f", "s16le", "-ar", "44100", "-ac", "2", "-"]
+                "-i", path] + NORM_AF + PCM_OUT
     if t == "music":
         path = os.path.join(bdir, seg["resolved"]["playlist_path"])
         return ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin", "-re",
                 "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
                 "-f", "concat", "-safe", "0", "-i", path,
-                "-t", str(seg["params"].get("duration_s", 900)),
-                "-f", "s16le", "-ar", "44100", "-ac", "2", "-"]
+                "-t", str(seg["params"].get("duration_s", 900))] + NORM_AF + PCM_OUT
     raise ValueError("unknown segment type %s" % t)
 
 
@@ -287,11 +332,10 @@ def idle_cmd():
     return ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin", "-re",
             "-stream_loop", "-1",
             "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
-            "-f", "concat", "-safe", "0", "-i", IDLE_PLAYLIST,
-            "-f", "s16le", "-ar", "44100", "-ac", "2", "-"]
+            "-f", "concat", "-safe", "0", "-i", IDLE_PLAYLIST] + NORM_AF + PCM_OUT
 
 
-def run_idle(sink):
+def run_idle(sink, srcpw):
     """Hold the mount with the idle music loop while the queue is empty, so the
     Icecast source never drops between programming. Returns when a block is
     queued or a stop is requested. Returns False if idle playback can't run
@@ -304,6 +348,7 @@ def run_idle(sink):
     # Explicit idle marker (not clear_state) so /now can distinguish "player is
     # holding the stream with idle music" from "player off, fallback loop on".
     write_state({"idle": True, "started_at": br.now_iso()})
+    push_metadata(srcpw, "ai-radio · music mix")
     proc = subprocess.Popen(idle_cmd(), stdout=subprocess.PIPE)
     try:
         while not _stop_requested and not _skip_block:
@@ -341,7 +386,8 @@ def main():
     signal.signal(signal.SIGINT, _on_stop)
     signal.signal(signal.SIGHUP, _on_skip)
 
-    sink = open_sink(load_srcpw())
+    srcpw = load_srcpw()
+    sink = open_sink(srcpw)
     log("sink up, draining queue")
     try:
         while not _stop_requested:
@@ -351,7 +397,7 @@ def main():
                 # service and flap the source, killing any Cast). Hold the
                 # mount playing idle music until a block is queued. Only exit
                 # if idle playout itself can't run.
-                if not run_idle(sink):
+                if not run_idle(sink, srcpw):
                     log("queue drained")
                     break
                 continue
@@ -382,6 +428,7 @@ def main():
                              "segment_type": seg.get("type"),
                              "segment_title": (seg.get("resolved") or {}).get("title"),
                              "started_at": br.now_iso()})
+                push_metadata(srcpw, segment_metadata_title(seg))
                 run_segment(seg, bdir, sink)
             if _skip_block:
                 log("cutover: abandoning %s, re-reading queue" % block_id)

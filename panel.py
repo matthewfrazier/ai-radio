@@ -317,6 +317,31 @@ CAST_CTL = os.path.join(BASE, "cast_ctl.py")
 # The active cast target, persisted so /now can restore its output state on a
 # page refresh (casting is device-side and outlives the browser session).
 CAST_TARGET_FILE = os.path.join(BASE, "cast_target.json")
+# Cached device list so a page load (or many) doesn't trigger an ~8s LAN scan
+# every time -- devices rarely change. The Rescan button forces a fresh scan.
+CAST_DEVICES_FILE = os.path.join(BASE, "cast_devices.json")
+CAST_DEVICES_TTL = 600
+
+
+def cast_devices(refresh=False):
+    if not refresh:
+        try:
+            with open(CAST_DEVICES_FILE) as f:
+                c = json.load(f)
+            if isinstance(c.get("devices"), list) and time.time() - c.get("ts", 0) < CAST_DEVICES_TTL:
+                return c["devices"]
+        except Exception:
+            pass
+    r = _cast("list")
+    if isinstance(r, list):
+        try:
+            tmp = CAST_DEVICES_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"ts": time.time(), "devices": r}, f)
+            os.replace(tmp, CAST_DEVICES_FILE)
+        except OSError:
+            pass
+    return r
 
 
 def _cast_target_read():
@@ -561,7 +586,8 @@ class H(BaseHTTPRequestHandler):
                 if route == ["log"]:
                     return self._send(200, "application/json", json.dumps(player_log()).encode())
                 if route == ["cast", "devices"]:
-                    return self._send(200, "application/json", json.dumps(_cast("list")).encode())
+                    refresh = parse_qs(u.query).get("refresh", ["0"])[0] in ("1", "true")
+                    return self._send(200, "application/json", json.dumps(cast_devices(refresh)).encode())
                 if len(route) == 2 and route[0] == "day":
                     return self._send(200, "application/json", json.dumps(day_program.day_summary(route[1])).encode())
                 if route == ["live_test"]:
