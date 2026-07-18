@@ -137,6 +137,16 @@ def _try_llm(params, prompt):
         return None
 
 
+# One-shot example that fixes tone + length. Facts here are illustrative only;
+# the prompt tells the model not to reuse them.
+_RECAP_EXAMPLE = (
+    "Tracks: Whatever I Fear, Come Down, Rings\n"
+    "Recap: A set of Toad the Wet Sprocket started with Whatever I Fear and then the 1991 "
+    "classic Come Down, followed by Rings, a track Glen Phillips described as meditating on "
+    "the circular nature of relationships."
+)
+
+
 def build_recap_text(params, context):
     if not context:
         raise RuntimeError("recap preview is only available in whole-block preview")
@@ -144,22 +154,30 @@ def build_recap_text(params, context):
     want_factoid = bool(params.get("include_factoid"))
     seed = params.get("factoid_seed", "")
     if want_factoid and seed:
-        factoid_clause = " Then add one short, accurate factoid about %s." % seed
+        detail = ("Weave in at most one short factual detail, preferring one about %s, "
+                  "only if you are confident it is correct." % seed)
     elif want_factoid:
-        factoid_clause = " Then add one short, accurate factoid about one of these songs or artists."
+        detail = ("Weave in at most one short factual detail (a year, songwriter, or what a "
+                  "song is about), only where you are confident it is correct -- omit "
+                  "anything you are unsure of rather than guess.")
     else:
-        factoid_clause = ""
+        detail = "Do not add any trivia -- just the back-announce."
     prompt = (
-        "Write a warm radio recap of about 100 words (~40 seconds spoken) of the music "
-        "just played, naming a few of these tracks and inviting the listener to stay. "
-        "Use only these track names, invent nothing. No preamble. %s%s\nTracks: %s"
-        % (_PLAIN, factoid_clause,
-           ", ".join(tracks[:8]) if tracks else "(the recent set)")
+        "Write a brief spoken back-announce for radio of the tracks that just played, in "
+        "order, read aloud. Name the artist if you recognize it from the track titles. "
+        "1 to 2 sentences, 45 words maximum. %s "
+        "Understated and factual. Do NOT greet or address the listener, no 'you' or 'we', "
+        "no sign-off, no 'stick around', no filler adjectives (wonderful, beautiful, "
+        "shimmering, smooth), no rhetorical questions. %s\n\n"
+        "Example (for tone and length only -- do NOT reuse its facts):\n%s\n\n"
+        "Tracks: %s\nRecap:"
+        % (detail, _PLAIN, _RECAP_EXAMPLE,
+           ", ".join(tracks[:8]) if tracks else "(recent set)")
     )
     text = _try_llm(params, prompt)
     if not text:
-        listed = ", ".join(tracks[:6]) if tracks else "a great set"
-        text = "That was %s. Stay with us." % listed
+        listed = ", ".join(tracks[:6]) if tracks else "a set"
+        text = "That was %s." % listed
     return text, "Recap"
 
 
