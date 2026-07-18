@@ -5,9 +5,13 @@ dedicated-host deployment overlay on top of the upstream station engine. Pull
 upstream fixes with `git fetch upstream && git merge upstream/main`.
 
 ## What lives here (overlay, not in upstream)
-- `PLAN.md` — the current prioritized revision plan (P0 safety → P1
-  reliability → P2 operator trust → P3 goal completion). Work it in order;
-  read it before starting anything new on the blocks feature.
+- `DAY_PROGRAMMING.md` — the in-design 24h auto-programming vision (standard
+  templated hour, day generator, edit-on-a-24h-horizon experience).
+- `BACKLOG.md` — tracked future work (e.g. news-topic distillation → 70s
+  research briefs), each item optionally with an investigation agent attached.
+- `PLAN.md` — the prioritized revision plan (P0 safety → P1 reliability → P2
+  operator trust → P3 goal completion), executed 2026-07-17. Read it before
+  starting anything new on the blocks feature.
 - `PROGRAM_BLOCKS.md` — in-progress "programming blocks" admin surface
   (`/blocks`): scheduled hour-long blocks mixing live news, TTS, and Jellyfin
   music. Read this before touching `block_*.py`, `blocks_page.py`,
