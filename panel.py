@@ -307,6 +307,34 @@ PLAYER_STATE_FILE = os.path.join(BASE, "player_state.json")
 
 CAST_PY = os.path.join(BASE, ".venv-cast", "bin", "python")
 CAST_CTL = os.path.join(BASE, "cast_ctl.py")
+# The active cast target, persisted so /now can restore its output state on a
+# page refresh (casting is device-side and outlives the browser session).
+CAST_TARGET_FILE = os.path.join(BASE, "cast_target.json")
+
+
+def _cast_target_read():
+    try:
+        with open(CAST_TARGET_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _cast_target_write(d):
+    try:
+        tmp = CAST_TARGET_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(d, f)
+        os.replace(tmp, CAST_TARGET_FILE)
+    except OSError:
+        pass
+
+
+def _cast_target_clear():
+    try:
+        os.remove(CAST_TARGET_FILE)
+    except OSError:
+        pass
 
 
 def _lan_ip():
@@ -347,7 +375,7 @@ def now_state():
         st = {}
     return {"player_active": _player_active(), "state": st,
             "queue": block_render.load_queue(), "stream": icecast_status(),
-            "stream_url": STREAM_URL}
+            "stream_url": STREAM_URL, "cast": _cast_target_read()}
 
 
 def _api_route(path):
@@ -371,7 +399,13 @@ def _start_player():
 def _cutover_player():
     # SIGHUP = "abandon current block, re-read the queue" -- an in-process
     # cutover that avoids stopping the unit (which would flap writ-stream).
-    subprocess.run(["systemctl", "kill", "-s", "HUP", PLAYER_UNIT], capture_output=True)
+    # --kill-who=main is REQUIRED: the default control-group kill broadcasts
+    # SIGHUP to every process in the unit, including the persistent sink
+    # ffmpeg, which terminates on SIGHUP -> the Icecast source drops for ~1.5s
+    # mid-cutover and any Cast receiver quits. Only the main python loop must
+    # get the signal (it handles it as "re-read the queue").
+    subprocess.run(["systemctl", "kill", "--kill-who=main", "-s", "HUP", PLAYER_UNIT],
+                   capture_output=True)
 
 
 def schedule_block(block_id, mode, prerender=True, start_index=0):
@@ -609,11 +643,14 @@ class H(BaseHTTPRequestHandler):
                                                        body.get("opts"), today=today)
                     return self._send(200, "application/json", json.dumps(result).encode())
                 if route == ["cast", "start"]:
-                    return self._send(200, "application/json", json.dumps(
-                        _cast("start", body["uuid"], _cast_stream_url(), "audio/mpeg")).encode())
+                    r = _cast("start", body["uuid"], _cast_stream_url(), "audio/mpeg")
+                    if r.get("state") in ("PLAYING", "BUFFERING"):
+                        _cast_target_write({"uuid": r.get("uuid"), "name": r.get("name")})
+                    return self._send(200, "application/json", json.dumps(r).encode())
                 if route == ["cast", "stop"]:
-                    return self._send(200, "application/json", json.dumps(
-                        _cast("stop", body["uuid"])).encode())
+                    r = _cast("stop", body["uuid"])
+                    _cast_target_clear()
+                    return self._send(200, "application/json", json.dumps(r).encode())
                 if route == ["station"]:
                     cfg = load_cfg()
                     for k in ("weather_location", "recap_llm_backend", "recap_llm_model"):

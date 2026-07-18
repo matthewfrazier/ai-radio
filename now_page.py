@@ -98,7 +98,9 @@ const BASE=location.pathname.replace(/\/+$/,'');
 let picked="", airingId="", airingIdx=-1, airingCount=0, airingStartedMs=0;
 // Output is one-at-a-time: "" none, "local" this device's <audio>, or a cast
 // device uuid. castUuid tracks the speaker we told to play (to stop it).
-let outputTarget="", castUuid="";
+// The server persists the active cast target, so poll() can restore this state
+// on a page refresh instead of forgetting it and defaulting to local.
+let outputTarget="", castUuid="", castName="";
 
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
@@ -232,9 +234,33 @@ function renderNow(st){
   $('navMsg').textContent = 'segment '+(idx+1)+' / '+n;
 }
 
+// Reconcile UI output state with the server's authoritative cast target (set
+// when a cast succeeds, cleared on stop). On refresh this restores "casting to
+// X" instead of resetting to local; if a cast ended elsewhere it drops back to
+// no-selection rather than falsely showing a speaker.
+function reconcileOutput(cast){
+  const sel=$('target');
+  if(cast && cast.uuid){
+    castUuid=cast.uuid; castName=cast.name||cast.uuid;
+    if(outputTarget!==cast.uuid){
+      outputTarget=cast.uuid;
+      $('player').pause();
+      if(sel && [...sel.options].some(o=>o.value===cast.uuid)) sel.value=cast.uuid;
+      $('outMsg').textContent='casting to '+castName;
+    }
+  } else {
+    castUuid='';
+    if(outputTarget && outputTarget!=='local'){
+      outputTarget=''; castName='';
+      $('outMsg').textContent='not playing — choose an output';
+    }
+  }
+}
+
 async function poll(){
   try{
     const n=await (await fetch(BASE+'/api/now')).json();
+    reconcileOutput(n.cast);
     const s=n.stream||{};
     $('sstate').textContent=s.live?'live':'offline';
     $('sdot').className='dot '+(s.live?'live':'bad');
@@ -274,8 +300,10 @@ async function loadTargets(){
       const o=document.createElement('option'); o.value=d.uuid;
       o.textContent=d.name+' ('+(d.type==='group'?'group':d.type)+')'; sel.appendChild(o);
     });
-    sel.value = prev || outputTarget || 'local';
-    tick.done(list.length+' speakers + this device');
+    const casting = outputTarget && outputTarget!=='local';
+    sel.value = casting ? outputTarget : (prev || 'local');
+    if(casting) tick.done('casting to '+castName);
+    else tick.done(list.length+' speakers + this device');
   }catch(e){ tick.fail(e); }
 }
 
