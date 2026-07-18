@@ -104,9 +104,16 @@ brief to collide. No new state file; the block is the ledger.
   targeted **by role**; bulk edits across day-parts; "Edit full segments →"
   deep-links into `/blocks`. Routes: `GET/POST /api/day/{date}`,
   `POST /api/day/{date}/generate|hour/{hh}|bulk`, `DELETE /api/day/{date}`.
-- Scheduler gains an additive entry `mode` (`"now"|"queue"`, default queue);
-  generated hourly entries use `mode:"now"` for predictable top-of-hour
-  cutover. **← operator decision needed before Phase 3** (see below).
+- **Operator decision (2026-07-18): queue, not cutover.** Generated hourly
+  entries use the existing default queue behavior — an hour always plays to
+  completion, nothing is ever truncated. No `mode` field is added. Because a
+  standard hour is ~48–57 min and each hour's entry fires at :00, blocks
+  finish before the next hour and the static music loop fills the small gap
+  (stream never goes silent); the fixed :00 schedule times keep hours landing
+  near the top without drift as long as a block stays under 60 min. The day
+  generator therefore sizes the two music segments to fill most of the hour
+  (leaving end-recap slack) so gaps stay small. This simplifies Phase 3 (no
+  scheduler change).
 
 ### Change ledger (all additive / backward-compatible)
 
@@ -132,7 +139,7 @@ plugin layer, an HTTP framework, or unifying the two inline UI pages.
 1. **recap/factoid topics + auto-disjoint news** — no scheduling change,
    nothing airs until played. (this phase)
 2. **templates + single-hour generation** (`POST /api/blocks/from_template`).
-3. **day generator + scheduler `mode`** — needs the `mode:"now"` cutover sign-off.
+3. **day generator** — queue behavior (decided); no scheduler change needed.
 4. **day UI** (`/day` + `/api/day/*`), browser-verified.
 5. **polish** — retention/cleanup alignment, docs, coherence + staleness runs.
 

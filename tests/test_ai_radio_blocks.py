@@ -21,6 +21,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import block_render  # noqa: E402
+import hour_templates  # noqa: E402
 import jellyfin_client  # noqa: E402
 import live_source  # noqa: E402
 import llm_backends  # noqa: E402
@@ -320,6 +321,35 @@ class AutoSourceTests(unittest.TestCase):
             block_render.resolve_live_segment(seg, prior_source_ids=["npr"])
         self.assertEqual(seg["resolved"]["source_id"], "bbc_world")  # npr used -> next bulletin
         self.assertEqual(seg["status"], "ok")
+
+
+class HourTemplateTests(unittest.TestCase):
+    """build_hour materializes the standard hour with role tags + per-hour
+    variation (genre by day-part, rotating news lead)."""
+
+    def test_standard_hour_shape_and_roles(self):
+        segs = hour_templates.build_hour(9)
+        roles = [s["role"] for s in segs]
+        self.assertEqual(roles, ["weather", "news_1", "news_2", "music_1", "news_3",
+                                 "recap_mid", "music_2", "news_fresh", "recap_hour"])
+        types = {s["role"]: s["type"] for s in segs}
+        self.assertEqual(types["weather"], "tts")
+        self.assertEqual(types["news_1"], "live")
+        self.assertEqual(types["music_1"], "music")
+        self.assertEqual(types["recap_mid"], "tts")
+        # news_fresh is the disjoint "auto" source
+        nf = next(s for s in segs if s["role"] == "news_fresh")
+        self.assertEqual(nf["params"]["source_id"], "auto")
+
+    def test_news_lead_rotates_by_hour(self):
+        lead0 = next(s for s in hour_templates.build_hour(0) if s["role"] == "news_1")["params"]["source_id"]
+        lead1 = next(s for s in hour_templates.build_hour(1) if s["role"] == "news_1")["params"]["source_id"]
+        self.assertNotEqual(lead0, lead1)
+
+    def test_music_genre_varies_by_daypart(self):
+        overnight = next(s for s in hour_templates.build_hour(3) if s["role"] == "music_1")["params"]["query"]
+        evening = next(s for s in hour_templates.build_hour(20) if s["role"] == "music_1")["params"]["query"]
+        self.assertNotEqual(overnight, evening)
 
 
 class SchedulerTests(unittest.TestCase):

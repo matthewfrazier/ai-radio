@@ -19,6 +19,7 @@ from urllib.parse import urlparse, parse_qs
 from tts_engines import kokoro_voices, kokoro_speech
 import block_render
 import blocks_page
+import hour_templates
 import jellyfin_client
 import live_source
 import llm_backends
@@ -539,6 +540,17 @@ class H(BaseHTTPRequestHandler):
                 if route == ["llm_test"]:
                     text = llm_backends.generate(body["backend"], body["model"], body["prompt"])
                     return self._send(200, "application/json", json.dumps({"text": text}).encode())
+                if route == ["blocks", "from_template"]:
+                    template = body.get("template", "standard_hour")
+                    builder = hour_templates.TEMPLATES.get(template)
+                    if not builder:
+                        return self._send(400, "text/plain", ("unknown template: %s" % template).encode())
+                    hour = int(body.get("hour", datetime.now().hour))
+                    segs = builder(hour, body.get("opts"))
+                    title = body.get("title") or ("%s %02d:00" % (template, hour))
+                    block = block_render.create_block_from_segments(
+                        title, segs, template={"name": template, "hour": hour})
+                    return self._send(200, "application/json", json.dumps(block).encode())
                 if route == ["blocks"]:
                     return self._send(200, "application/json", json.dumps(block_render.create_block(body.get("title", ""))).encode())
                 if len(route) == 2 and route[0] == "blocks":

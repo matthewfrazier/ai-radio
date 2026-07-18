@@ -205,6 +205,20 @@ def create_block(title):
     return block
 
 
+def create_block_from_segments(title, segments, template=None, block_id=None):
+    """Mint a block pre-populated with segments (from a template). block_id
+    lets the day generator use a deterministic wall-clock id; template stamps
+    {name, day?, hour} for the generator/UI to recognize generated blocks."""
+    bid = block_id or new_block_id()
+    now = now_iso()
+    block = {"id": bid, "title": title or bid, "created_at": now, "updated_at": now,
+             "segments": segments, "schedule": {"state": "draft", "queued_at": None, "aired_at": None}}
+    if template:
+        block["template"] = template
+    save_block(block)
+    return block
+
+
 def write_markdown(block):
     lines = [f"# {block['title']}", "", f"_block {block['id']} · updated {block['updated_at']}_", ""]
     for i, seg in enumerate(block["segments"], 1):
