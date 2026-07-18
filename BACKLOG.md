@@ -7,7 +7,30 @@ item is scheduled for a build.
 
 ---
 
-## web-search-augmented factoids (Ollama tools) + Claude-vs-Ollama A/B test
+## live now-playing metadata (real artist/title) from the playlist
+
+**Status:** idea (2026-07-18). Directly reduces recap hallucination.
+
+**Goal.** Emit the actual current track's artist/title so (a) `/now` shows the
+real song playing and (b) recaps/factoids use **real artist metadata instead
+of the LLM inferring the artist from track titles** — the source of the only
+remaining recap-accuracy slips (e.g. "featuring Jay Dunne" on obscure tracks).
+
+**What we already have / what's missing.** Jellyfin returns artist fields we
+currently discard — `resolve_music_segment` keeps only track `Name` in
+`tracks_head`. First cheap step: also capture `AlbumArtist`/`Artists` per
+track. Then the recap prompt can be given "Title — Artist" pairs (no more
+guessing), and `/now` can show the real now-playing.
+
+**Emitting to the live stream (harder).** The music segment is one ffmpeg
+decoding a concat playlist of Jellyfin URLs into the sink, so per-track
+boundaries aren't visible to the sink. Options to weigh: (a) the block player
+tracks elapsed time against the resolved per-track durations and pushes
+Icecast metadata updates via `/admin/metadata?mount=/stream&song=...` as each
+track starts (needs per-track durations captured at resolve time); (b) play
+music track-by-track (one producer ffmpeg per track) so boundaries are known
+— cleaner metadata but more process churn. (a) is the smaller change and fits
+the existing FIFO-sink model. Ties into `player_state.json` (the /now feed).
 
 **Status:** idea (2026-07-18). Recaps/factoids currently run on Claude
 (`recap_llm_backend=claude` station default); Ollama is available but its
