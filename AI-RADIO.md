@@ -24,7 +24,15 @@ upstream fixes with `git fetch upstream && git merge upstream/main`.
 - `jf_source.py` — Jellyfin source engine: auth, `list` (library + playlists),
   `set <source>` rebuilds `music_playlist.txt` with per-track transcode URLs and
   restarts the stream.
-- `stream.sh` / `stream.sh.stub` — ffmpeg concat-loop into Icecast `/stream`.
+- `stream.sh` / `stream.sh.stub` — ffmpeg concat-loop into Icecast `/stream`
+  (MP3 / `audio/mpeg` — universal browser + Google Cast compatibility; the
+  block player's sink outputs MP3 too). Icecast `source-timeout` must be
+  >=30s (render gap) — see `config/icecast.xml.example`.
+- `cast_ctl.py` + `scripts/install-cast.sh` — Google Cast control
+  (pychromecast in `.venv-cast`; panel shells out to it). Cast from `/now`.
+  Cast to a **group** or standalone device; individual group *members* return
+  NOT_ALLOWED. Devices fetch the **LAN** URL `http://<lan-ip>:8000/stream`,
+  not the tailnet URL.
 - `jellyfin.conf.example`, `.stubenv.example` — config templates.
 
 ## Deploy target

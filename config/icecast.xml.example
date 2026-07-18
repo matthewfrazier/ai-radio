@@ -4,6 +4,10 @@
     <limits>
         <clients>100</clients>
         <sources>4</sources>
+        <!-- >=30 so the block player's air-time render gap (a few seconds
+             with no data while TTS/recaps render) doesn't trip the timeout
+             and drop the sink -> dead air. -->
+        <source-timeout>60</source-timeout>
     </limits>
     <authentication>
         <source-password>YOUR_SOURCE_PASSWORD</source-password>

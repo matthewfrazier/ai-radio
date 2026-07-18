@@ -1,5 +1,6 @@
 # Python
 .venv/
+.venv-cast/
 __pycache__/
 *.pyc
 .python-version

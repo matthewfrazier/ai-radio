@@ -49,6 +49,17 @@ pre{white-space:pre-wrap;background:#8881;padding:.6rem;border-radius:8px;font-s
 </section>
 
 <section>
+  <div class="hd2"><h2>Cast to a speaker</h2></div>
+  <div class="row" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+    <select id="castPick" style="flex:1;min-width:10rem"></select>
+    <button id="btnCast" type="button">Cast</button>
+    <button class="ghost" id="btnCastStop" type="button">Stop</button>
+    <button class="ghost" id="btnCastRescan" type="button">Rescan</button>
+  </div>
+  <div class="sub" id="castMsg">scanning for devices…</div>
+</section>
+
+<section>
   <div class="hd2"><h2>Now airing</h2></div>
   <div class="now" id="now">loading…</div>
   <div class="sub" id="queue"></div>
@@ -166,9 +177,49 @@ async function poll(){
   }catch(e){}
 }
 
+// --- Cast ---
+async function loadCastDevices(){
+  const tick=tickerFor($('castMsg'),20000); tick.set('scanning for devices');
+  try{
+    const list=await (await fetch(BASE+'/api/cast/devices')).json();
+    if(list.error) throw new Error(list.error);
+    const sel=$('castPick'); const prev=sel.value; sel.innerHTML='';
+    list.forEach(d=>{
+      const o=document.createElement('option');
+      o.value=d.uuid;
+      o.textContent=d.name+' ('+(d.type==='group'?'group':d.type)+')';
+      sel.appendChild(o);
+    });
+    if(prev) sel.value=prev;
+    tick.done(list.length+' devices/groups');
+  }catch(e){ tick.fail(e); }
+}
+$('btnCast').onclick=async()=>{
+  const uuid=$('castPick').value; if(!uuid) return;
+  const tick=tickerFor($('castMsg'),40000); tick.set('casting');
+  try{
+    const r=await (await fetch(BASE+'/api/cast/start',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({uuid}),signal:tick.signal})).json();
+    if(r.error) throw new Error(r.error);
+    if(r.state==='PLAYING'||r.state==='BUFFERING') tick.done('casting to '+esc(r.name)+' ('+r.state.toLowerCase()+')');
+    else tick.done('could not cast'+(r.hint?': '+esc(r.hint):' (state '+esc(r.state||'?')+')'));
+  }catch(e){ tick.fail(e); }
+};
+$('btnCastStop').onclick=async()=>{
+  const uuid=$('castPick').value; if(!uuid) return;
+  const tick=tickerFor($('castMsg'),30000); tick.set('stopping');
+  try{
+    await fetch(BASE+'/api/cast/stop',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({uuid}),signal:tick.signal});
+    tick.done('stopped');
+  }catch(e){ tick.fail(e); }
+};
+$('btnCastRescan').onclick=loadCastDevices;
+
 (async function init(){
   await loadPicker();
   await poll();
+  loadCastDevices();  // slow (~8s discovery); runs in the background
   setInterval(poll, 4000);
   setInterval(loadPicker, 20000);
 })();

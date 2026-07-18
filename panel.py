@@ -8,6 +8,7 @@ import glob
 import json
 import os
 import re
+import socket
 import subprocess
 import threading
 import time
@@ -304,6 +305,37 @@ PLAYER_UNIT = "writ-block-player.service"
 PLAYER_STATE_FILE = os.path.join(BASE, "player_state.json")
 
 
+CAST_PY = os.path.join(BASE, ".venv-cast", "bin", "python")
+CAST_CTL = os.path.join(BASE, "cast_ctl.py")
+
+
+def _lan_ip():
+    # the box's LAN (192.168.x) address -- Cast devices fetch the stream from
+    # here, and they're not on the tailnet, so the tailnet URL won't do.
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.168.1.1", 80))
+        return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+def _cast_stream_url():
+    return "http://%s:8000/stream" % _lan_ip()  # /stream is MP3 -> Cast-compatible
+
+
+def _cast(*args, timeout=40):
+    if not os.path.exists(CAST_PY):
+        return {"error": "cast not installed (.venv-cast missing)"}
+    p = subprocess.run([CAST_PY, CAST_CTL, *args], capture_output=True, text=True, timeout=timeout)
+    try:
+        return json.loads(p.stdout.strip() or "{}")
+    except Exception:
+        return {"error": (p.stdout or p.stderr or "cast error").strip()[:200]}
+
+
 def now_state():
     """Everything the /now monitor needs in one poll: live stream status, the
     player's current block/segment, and the queue."""
@@ -460,6 +492,8 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, "application/json", json.dumps({"entries": block_render.load_schedule()}).encode())
                 if route == ["now"]:
                     return self._send(200, "application/json", json.dumps(now_state()).encode())
+                if route == ["cast", "devices"]:
+                    return self._send(200, "application/json", json.dumps(_cast("list")).encode())
                 if len(route) == 2 and route[0] == "day":
                     return self._send(200, "application/json", json.dumps(day_program.day_summary(route[1])).encode())
                 if route == ["live_test"]:
@@ -571,6 +605,12 @@ class H(BaseHTTPRequestHandler):
                     result = day_program.generate_day(route[1], body.get("template", "standard_hour"),
                                                        body.get("opts"), today=today)
                     return self._send(200, "application/json", json.dumps(result).encode())
+                if route == ["cast", "start"]:
+                    return self._send(200, "application/json", json.dumps(
+                        _cast("start", body["uuid"], _cast_stream_url(), "audio/mpeg")).encode())
+                if route == ["cast", "stop"]:
+                    return self._send(200, "application/json", json.dumps(
+                        _cast("stop", body["uuid"])).encode())
                 if route == ["station"]:
                     cfg = load_cfg()
                     for k in ("weather_location", "recap_llm_backend", "recap_llm_model"):

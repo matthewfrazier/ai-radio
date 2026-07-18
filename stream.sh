@@ -11,5 +11,5 @@ sleep 1
 exec ffmpeg -hide_banner -loglevel warning -nostdin -re -stream_loop -1 \
   -protocol_whitelist file,http,https,tcp,tls,crypto \
   -f concat -safe 0 -i "$PLAYLIST" \
-  -c:a libvorbis -q:a 4 -content_type audio/ogg -f ogg \
+  -c:a libmp3lame -b:a 128k -content_type audio/mpeg -f mp3 \
   "icecast://source:${SRCPW}@127.0.0.1:8000/stream"

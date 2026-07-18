@@ -9,42 +9,27 @@ item is scheduled for a build.
 
 ## cast to Google Nest / Home devices
 
-**Status:** idea (2026-07-18). Feasible — no network blocker.
+**Status:** BUILT 2026-07-18 (direct pychromecast). Remaining: optional Home
+Assistant path (below).
 
-**Key finding.** The station box (CT112) is directly on the home LAN
-(`eth0 192.168.1.153/24`), the same subnet as Nest/Home devices — so mDNS
-Cast discovery works and the devices can fetch the stream. The catch: cast the
-**LAN Icecast URL** `http://192.168.1.153:8000/stream`, NOT the tailnet URL
-`https://ai-radio.tailbe5094.ts.net/stream` (Nest devices aren't on the
-tailnet).
+**Shipped:** `cast_ctl.py` (pychromecast in `.venv-cast`), panel
+`/api/cast/{devices,start,stop}`, a Cast picker on `/now`. The primary stream
+was switched to **MP3** (`/stream`, `audio/mpeg`) — Cast won't play live
+Ogg/Vorbis — which also dropped Vorbis + a transcoder and simplified to one
+source. Verified end-to-end: casts to speaker **groups** and standalone
+devices; individual group *members* return `LAUNCH_ERROR NOT_ALLOWED` (the UI
+surfaces a "cast to its group" hint). Devices fetch the LAN URL. Also fixed a
+real dead-air bug found along the way: Icecast `source-timeout` was 10s but
+the block player's air-time render (Claude recaps) now runs longer, so the
+idle sink was being dropped mid-render → raised to 60s.
 
-**What it takes:**
-1. **Control path** — Google Cast needs a "sender." Pragmatic homelab option:
-   `pychromecast` (the standard Python Cast library — one new dependency,
-   justified: no stdlib path to Cast) on the CT to discover a device by name
-   (or connect by IP) and tell it to play the media URL. A panel button
-   "Cast to <device>" with a discovered-device dropdown. Alternatives: Home
-   Assistant's cast integration if the fleet runs HA, or a Google Home
-   routine (clunkier, less programmatic).
-2. **Stream format** — `/stream` is Ogg/Vorbis. Google Cast's default media
-   receiver lists Vorbis support, but LIVE Icecast Ogg streams can be finicky
-   on Cast; a quick test decides. Fallback: add a second Icecast MP3 mount
-   (ffmpeg `-c:a libmp3lame` alongside the existing libvorbis sink) purely for
-   Cast compatibility — MP3 is the safest Cast format.
-3. **Content-type/headers** — Cast wants a correct `Content-Type`
-   (audio/mpeg or application/ogg) and a stable live endpoint; Icecast already
-   sets these, verify against Cast's fetch.
-
-**Phasing.** Phase 1 (proof, ~an afternoon): a `pychromecast` script that
-casts `http://192.168.1.153:8000/stream` to a named Nest device and confirms
-it plays; if Vorbis fails, add the MP3 mount and retest. Phase 2: a panel
-"Cast" control (device discovery + start/stop) reusing the existing
-zero-framework UI.
-
-**Risks:** Vorbis-live-on-Cast compat (mitigated by the MP3 mount);
-mDNS/discovery if Nest devices sit on a different VLAN than 192.168.1.0/24
-(then connect by IP); Cast session drops (pychromecast can re-cast on
-disconnect). No fleet/infra request needed given the CT's LAN presence.
+**Remaining — optional Home Assistant path (do not rely on it).** HA is on the
+network and its cast integration can drive devices too. Add an optional path:
+if `station.json` has `ha_url` + a token (`ha.conf`, vault), also list HA
+`media_player` cast entities and cast via HA's `media_player.play_media`
+service — an alternate to pychromecast, useful if a device is unreachable by
+direct control. Config-gated; direct pychromecast stays the default. Needs HA
+url + long-lived token to activate/test.
 
 ---
 

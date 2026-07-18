@@ -83,7 +83,7 @@ def start_sink(srcpw):
     return subprocess.Popen([
         "ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin",
         "-f", "s16le", "-ar", "44100", "-ac", "2", "-i", FIFO_PATH,
-        "-c:a", "libvorbis", "-q:a", "4", "-content_type", "audio/ogg", "-f", "ogg",
+        "-c:a", "libmp3lame", "-b:a", "128k", "-content_type", "audio/mpeg", "-f", "mp3",
         "icecast://source:%s@127.0.0.1:8000/stream" % srcpw,
     ])
 
