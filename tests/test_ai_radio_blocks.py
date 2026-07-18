@@ -201,7 +201,7 @@ class RenderMergeTests(unittest.TestCase):
         def fake_load(_bid):
             return loads.pop(0)
 
-        def fake_resolve(s):
+        def fake_resolve(s, prior_source_ids=()):
             s["resolved"] = {"title": "NPR", "url": "http://x/newscast.mp3"}
             s["status"] = "ok"
             s["resolved_at"] = "t"
@@ -257,6 +257,69 @@ class CleanupTests(unittest.TestCase):
         self.assertFalse(os.path.isdir(block_render.block_dir("20200101T000000")))
         self.assertTrue(os.path.isdir(block_render.block_dir("20200102T000000")))
         self.assertTrue(os.path.isdir(block_render.block_dir("20990101T000000")))
+
+
+class RecapFactoidTests(unittest.TestCase):
+    """recap/factoid TTS builders: reference the tracks earlier music
+    segments resolved to, and ALWAYS degrade to a deterministic template
+    when no LLM is configured (a dead Ollama must never error an hour)."""
+
+    def _music(self, names, dur=720):
+        return {"id": "m", "type": "music", "params": {"duration_s": dur},
+                "resolved": {"tracks_head": names}}
+
+    def test_recap_fallback_names_recent_tracks(self):
+        segs = [self._music(["Song A", "Song B", "Song C"]),
+                {"id": "r", "type": "tts", "params": {"topic": "recap", "scope": "music"}}]
+        text, title = tts_content.build_recap_text(segs[1]["params"], {"segments": segs, "index": 1})
+        self.assertEqual(title, "Recap")
+        self.assertIn("Song A", text)  # no llm_backend -> deterministic, names tracks
+
+    def test_recap_scope_music_excludes_pre_recap_tracks(self):
+        segs = [self._music(["Old One"]),
+                {"id": "r0", "type": "tts", "params": {"topic": "recap"}},
+                self._music(["New One"]),
+                {"id": "r1", "type": "tts", "params": {"topic": "recap", "scope": "music"}}]
+        text, _ = tts_content.build_recap_text(segs[3]["params"], {"segments": segs, "index": 3})
+        self.assertIn("New One", text)
+        self.assertNotIn("Old One", text)  # excluded: before the previous recap
+
+    def test_aired_tracks_truncated_by_duration(self):
+        seg = self._music(["t%d" % i for i in range(20)], dur=420)  # 420//210 = 2
+        self.assertEqual(tts_content._aired_tracks(seg), ["t0", "t1"])
+
+    def test_recap_requires_context(self):
+        with self.assertRaises(RuntimeError):
+            tts_content.build_recap_text({"topic": "recap"}, None)
+
+    def test_factoid_fallback_is_nonempty(self):
+        text, title = tts_content.build_factoid_text({"topic": "factoid", "source": "freeform"}, None)
+        self.assertEqual(title, "Factoid")
+        self.assertTrue(text.strip())
+
+    def test_spoken_strips_markdown(self):
+        # Kokoro would otherwise read '#'/'**' aloud.
+        out = tts_content._spoken("# Recap\n\nWe played **Song A**.\n- and more")
+        for junk in ("#", "*", "\n\n"):
+            self.assertNotIn(junk, out)
+        self.assertIn("Song A", out)
+
+
+class AutoSourceTests(unittest.TestCase):
+    """source_id:"auto" resolves to a bulletin not already used earlier in
+    the block -- the robust half of "news not from the original sources"."""
+
+    def test_auto_picks_disjoint_podcast_source_and_records_it(self):
+        srcs = [{"id": "npr", "kind": "podcast_latest"},
+                {"id": "bbc_world", "kind": "podcast_latest"},
+                {"id": "cnn"}]
+        seg = {"type": "live", "params": {"source_id": "auto", "duration_s": 300}}
+        with patch.object(block_render.live_source, "load_sources", return_value=srcs), \
+             patch.object(block_render.live_source, "resolve_live",
+                          side_effect=lambda sid: {"title": sid, "url": "http://x", "id": sid}):
+            block_render.resolve_live_segment(seg, prior_source_ids=["npr"])
+        self.assertEqual(seg["resolved"]["source_id"], "bbc_world")  # npr used -> next bulletin
+        self.assertEqual(seg["status"], "ok")
 
 
 class SchedulerTests(unittest.TestCase):

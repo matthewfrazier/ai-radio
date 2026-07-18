@@ -242,18 +242,33 @@ def _probe_duration(path):
         return None
 
 
-def build_tts_text(topic, params):
+def build_tts_text(topic, params, context=None):
     if topic == "weather":
         return tts_content.build_weather_text(params.get("location", ""))
     if topic == "freeform":
         text = llm_backends.generate(params["llm_backend"], params["llm_model"], params["prompt"])
         return text, params["prompt"][:60]
+    if topic == "recap":
+        return tts_content.build_recap_text(params, context)
+    if topic == "factoid":
+        return tts_content.build_factoid_text(params, context)
     raise ValueError(f"unknown tts topic: {topic}")
 
 
-def resolve_live_segment(seg):
-    r = live_source.resolve_live(seg["params"]["source_id"])
-    seg["resolved"] = {"title": r["title"], "url": r["url"]}
+def resolve_live_segment(seg, prior_source_ids=()):
+    sid = seg["params"]["source_id"]
+    if sid == "auto":
+        # pick a bulletin not already used earlier in this block; prefer real
+        # bulletins (podcast_latest) over full-channel relays, then anything
+        # unused, then fall back to the whole list.
+        used = set(prior_source_ids)
+        srcs = live_source.load_sources()
+        pool = ([s for s in srcs if s["id"] not in used and s.get("kind") == "podcast_latest"]
+                or [s for s in srcs if s["id"] not in used]
+                or srcs)
+        sid = pool[0]["id"]
+    r = live_source.resolve_live(sid)
+    seg["resolved"] = {"title": r["title"], "url": r["url"], "source_id": sid}
     seg["status"] = "ok"
     seg["resolved_at"] = now_iso()
 
@@ -265,13 +280,16 @@ def resolve_music_segment(seg, bdir):
         for t in r["tracks"]:
             f.write("file '%s'\n" % t["url"])
     seg["resolved"] = {"ref": r["ref"], "title": r["title"], "track_count": r["track_count"],
-                        "playlist_path": playlist_path}
+                        "playlist_path": playlist_path,
+                        # head track names so a recap can name what played and
+                        # the preview UI can label tracks (both otherwise lost).
+                        "tracks_head": [t["name"] for t in r["tracks"][:20]]}
     seg["status"] = "ok"
     seg["resolved_at"] = now_iso()
 
 
-def render_tts_segment(bdir, seg, cfg):
-    text, title = build_tts_text(seg["params"]["topic"], seg["params"])
+def render_tts_segment(bdir, seg, cfg, context=None):
+    text, title = build_tts_text(seg["params"]["topic"], seg["params"], context)
     engine = seg["params"].get("engine", "kokoro")
     voice = seg["params"].get("voice") or cfg.get("voice", "am_michael")
     speed = seg["params"].get("speed") or cfg.get("speed", 1.0)
@@ -314,7 +332,8 @@ def render_block(block_id, force=False):
     cfg = load_station_cfg()
     bdir = block_dir(block_id)
     changed = False
-    for seg in block["segments"]:
+    prior_sources = []
+    for i, seg in enumerate(block["segments"]):
         try:
             # live/music are always re-resolved -- cheap config-lookup/ICY-probe
             # or Jellyfin-list calls, no external cost to worry about like the
@@ -323,18 +342,26 @@ def render_block(block_id, force=False):
             # otherwise (e.g. a live-sources.json fix never takes effect on an
             # already-resolved segment without a manual force-render).
             if seg["type"] == "live":
-                resolve_live_segment(seg)
+                resolve_live_segment(seg, prior_sources)
                 changed = True
             elif seg["type"] == "music":
                 resolve_music_segment(seg, bdir)
                 changed = True
-            elif seg["type"] == "tts" and (force or is_stale(seg)):
-                render_tts_segment(bdir, seg, cfg)
-                changed = True
+            elif seg["type"] == "tts":
+                topic = seg["params"].get("topic")
+                # recap/factoid depend on what earlier segments resolved to in
+                # THIS pass, so they must re-render every air (ttl_s:0 already
+                # makes is_stale True; the explicit check documents intent).
+                if force or is_stale(seg) or topic in ("recap", "factoid"):
+                    render_tts_segment(bdir, seg, cfg, {"segments": block["segments"], "index": i})
+                    changed = True
         except Exception as e:
             seg["status"] = "error"
             seg["error"] = str(e)
             changed = True
+        if seg["type"] == "live":
+            prior_sources.append((seg.get("resolved") or {}).get("source_id")
+                                 or seg["params"].get("source_id"))
     if changed:
         # Re-read under lock and merge only the resolution fields back onto
         # the current on-disk block, so a title/segments edit made in the
