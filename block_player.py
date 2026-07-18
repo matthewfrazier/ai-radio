@@ -97,7 +97,9 @@ def segment_metadata_title(seg):
 def push_metadata(srcpw, title):
     """Update the Icecast /stream title (ICY metadata). Best-effort; a failure
     never affects playback. Icecast injects this into the MP3 ICY stream, which
-    the browser and the Cast receiver read as the current track title."""
+    the browser and the Cast receiver read as the current track title. Returns
+    True on success -- Icecast 400s a metadata update until the source has
+    finished connecting, so callers retry until it sticks."""
     try:
         q = urllib.parse.urlencode({"mount": "/stream", "mode": "updinfo",
                                     "charset": "UTF-8", "song": title})
@@ -105,8 +107,9 @@ def push_metadata(srcpw, title):
         req.add_header("Authorization", "Basic " +
                        base64.b64encode(("source:%s" % srcpw).encode()).decode())
         urllib.request.urlopen(req, timeout=3).read()
-    except Exception as e:
-        log("metadata push failed: %s" % e)
+        return True
+    except Exception:
+        return False
 
 
 def load_srcpw():
@@ -348,8 +351,8 @@ def run_idle(sink, srcpw):
     # Explicit idle marker (not clear_state) so /now can distinguish "player is
     # holding the stream with idle music" from "player off, fallback loop on".
     write_state({"idle": True, "started_at": br.now_iso()})
-    push_metadata(srcpw, "ai-radio · music mix")
     proc = subprocess.Popen(idle_cmd(), stdout=subprocess.PIPE)
+    pushed = False
     try:
         while not _stop_requested and not _skip_block:
             if br.load_queue():
@@ -359,6 +362,10 @@ def run_idle(sink, srcpw):
                 log("idle producer ended unexpectedly, exiting to fallback")
                 return False
             sink.write(chunk)
+            if not pushed:
+                # Retry each iteration (~0.4s) until it sticks -- Icecast 400s a
+                # metadata update until the freshly-connected source is ready.
+                pushed = push_metadata(srcpw, "ai-radio · music mix")
     finally:
         proc.terminate()
         proc.wait()
