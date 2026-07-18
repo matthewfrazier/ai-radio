@@ -7,6 +7,47 @@ item is scheduled for a build.
 
 ---
 
+## cast to Google Nest / Home devices
+
+**Status:** idea (2026-07-18). Feasible — no network blocker.
+
+**Key finding.** The station box (CT112) is directly on the home LAN
+(`eth0 192.168.1.153/24`), the same subnet as Nest/Home devices — so mDNS
+Cast discovery works and the devices can fetch the stream. The catch: cast the
+**LAN Icecast URL** `http://192.168.1.153:8000/stream`, NOT the tailnet URL
+`https://ai-radio.tailbe5094.ts.net/stream` (Nest devices aren't on the
+tailnet).
+
+**What it takes:**
+1. **Control path** — Google Cast needs a "sender." Pragmatic homelab option:
+   `pychromecast` (the standard Python Cast library — one new dependency,
+   justified: no stdlib path to Cast) on the CT to discover a device by name
+   (or connect by IP) and tell it to play the media URL. A panel button
+   "Cast to <device>" with a discovered-device dropdown. Alternatives: Home
+   Assistant's cast integration if the fleet runs HA, or a Google Home
+   routine (clunkier, less programmatic).
+2. **Stream format** — `/stream` is Ogg/Vorbis. Google Cast's default media
+   receiver lists Vorbis support, but LIVE Icecast Ogg streams can be finicky
+   on Cast; a quick test decides. Fallback: add a second Icecast MP3 mount
+   (ffmpeg `-c:a libmp3lame` alongside the existing libvorbis sink) purely for
+   Cast compatibility — MP3 is the safest Cast format.
+3. **Content-type/headers** — Cast wants a correct `Content-Type`
+   (audio/mpeg or application/ogg) and a stable live endpoint; Icecast already
+   sets these, verify against Cast's fetch.
+
+**Phasing.** Phase 1 (proof, ~an afternoon): a `pychromecast` script that
+casts `http://192.168.1.153:8000/stream` to a named Nest device and confirms
+it plays; if Vorbis fails, add the MP3 mount and retest. Phase 2: a panel
+"Cast" control (device discovery + start/stop) reusing the existing
+zero-framework UI.
+
+**Risks:** Vorbis-live-on-Cast compat (mitigated by the MP3 mount);
+mDNS/discovery if Nest devices sit on a different VLAN than 192.168.1.0/24
+(then connect by IP); Cast session drops (pychromecast can re-cast on
+disconnect). No fleet/infra request needed given the CT's LAN presence.
+
+---
+
 ## live now-playing metadata (real artist/title) from the playlist
 
 **Status:** idea (2026-07-18). Directly reduces recap hallucination.
