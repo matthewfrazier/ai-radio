@@ -79,6 +79,17 @@ let picked="", airingId="", airingIdx=-1;
 
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
+function tickerFor(el,timeoutMs){
+  const t0=Date.now();let label='';
+  const paint=()=>{el.textContent=label+' ('+Math.round((Date.now()-t0)/1000)+'s)';};
+  const id=setInterval(paint,1000);
+  const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),timeoutMs);
+  return {signal:controller.signal,set(l){label=l;paint();},
+    done(t){clearInterval(id);clearTimeout(timer);el.textContent=t;},
+    fail(e){clearInterval(id);clearTimeout(timer);const s=Math.round((Date.now()-t0)/1000);
+      el.textContent=e.name==='AbortError'?('timed out after '+s+'s'):('error: '+(e.message||e)+' (after '+s+'s)');}};
+}
+
 function statusDot(st){return st==='ok'?'ok':(st==='error'?'bad':'');}
 
 function segEntity(seg, blockId, airing){
@@ -181,7 +192,7 @@ async function poll(){
 async function loadCastDevices(){
   const tick=tickerFor($('castMsg'),20000); tick.set('scanning for devices');
   try{
-    const list=await (await fetch(BASE+'/api/cast/devices')).json();
+    const list=await (await fetch(BASE+'/api/cast/devices',{signal:tick.signal})).json();
     if(list.error) throw new Error(list.error);
     const sel=$('castPick'); const prev=sel.value; sel.innerHTML='';
     list.forEach(d=>{
