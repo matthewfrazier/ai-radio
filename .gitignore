@@ -67,3 +67,4 @@ block_player.pid
 .block_sink.fifo
 .state.lock
 schedule.json
+player_state.json

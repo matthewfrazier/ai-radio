@@ -19,6 +19,7 @@ triggers after overwriting the queue, avoiding a stop/start writ-stream flap.
 """
 import errno
 import fcntl
+import json
 import os
 import signal
 import subprocess
@@ -29,6 +30,7 @@ import block_render as br
 BASE = "/opt/writ-fm"
 FIFO_PATH = os.path.join(BASE, ".block_sink.fifo")
 STUBENV = os.path.join(BASE, ".stubenv")
+STATE_FILE = os.path.join(BASE, "player_state.json")
 
 _stop_requested = False
 _skip_block = False
@@ -37,6 +39,25 @@ _skip_block = False
 def log(msg):
     # stdout -> journald (systemd unit); this process is otherwise a black box.
     print("block_player: %s" % msg, flush=True)
+
+
+def write_state(d):
+    # Best-effort "what's airing right now" for the /now monitor view. Atomic;
+    # never fatal to playback.
+    try:
+        tmp = STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(d, f)
+        os.replace(tmp, STATE_FILE)
+    except OSError:
+        pass
+
+
+def clear_state():
+    try:
+        os.remove(STATE_FILE)
+    except OSError:
+        pass
 
 
 def _on_stop(signum, frame):
@@ -219,12 +240,19 @@ def main():
                 br.pop_front(block_id)
                 continue
             bdir = br.block_dir(block_id)
-            log("airing block %s (%d segments)" % (block_id, len(block["segments"])))
+            nsegs = len(block["segments"])
+            log("airing block %s (%d segments)" % (block_id, nsegs))
             _skip_block = False
-            for seg in block["segments"]:
+            for i, seg in enumerate(block["segments"]):
                 if _stop_requested or _skip_block:
                     break
                 log("segment %s %s" % (seg.get("type"), seg.get("id")))
+                write_state({"block_id": block_id, "title": block.get("title"),
+                             "segment_count": nsegs, "segment_index": i,
+                             "segment_id": seg.get("id"), "segment_role": seg.get("role"),
+                             "segment_type": seg.get("type"),
+                             "segment_title": (seg.get("resolved") or {}).get("title"),
+                             "started_at": br.now_iso()})
                 run_segment(seg, bdir, sink)
             if _skip_block:
                 log("cutover: abandoning %s, re-reading queue" % block_id)
@@ -235,6 +263,7 @@ def main():
             log("finished block %s" % block_id)
     finally:
         sink.close()
+        clear_state()
         log("player exiting")
 
 

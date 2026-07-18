@@ -25,6 +25,7 @@ import hour_templates
 import jellyfin_client
 import live_source
 import llm_backends
+import now_page
 import tts_engines
 
 BASE = "/opt/writ-fm"
@@ -142,7 +143,7 @@ audio{width:100%;margin-top:.4rem}
 a{color:#3b82f6}
 </style></head><body>
 <h1>WRIT-FM control</h1>
-<div class="sub">ai-radio &middot; repo stand-up pattern &middot; issue #38 &middot; <a href="/blocks">programming blocks</a></div>
+<div class="sub">ai-radio &middot; <a href="/blocks">blocks</a> &middot; <a href="/day">24-hour day</a> &middot; <a href="/now">now / monitor</a></div>
 
 <div class="status">
   <span><span id="kdot" class="dot"></span>Kokoro <span id="kstate">?</span></span>
@@ -300,6 +301,21 @@ loadSources();
 
 
 PLAYER_UNIT = "writ-block-player.service"
+PLAYER_STATE_FILE = os.path.join(BASE, "player_state.json")
+
+
+def now_state():
+    """Everything the /now monitor needs in one poll: live stream status, the
+    player's current block/segment, and the queue."""
+    st = {}
+    try:
+        with open(PLAYER_STATE_FILE) as f:
+            st = json.load(f)
+    except Exception:
+        st = {}
+    return {"player_active": _player_active(), "state": st,
+            "queue": block_render.load_queue(), "stream": icecast_status(),
+            "stream_url": STREAM_URL}
 
 
 def _api_route(path):
@@ -427,6 +443,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, "text/html; charset=utf-8", blocks_page.BLOCKS_PAGE.encode())
         if "/api/" not in u.path and u.path.rstrip("/").endswith("/day"):
             return self._send(200, "text/html; charset=utf-8", day_page.DAY_PAGE.encode())
+        if "/api/" not in u.path and u.path.rstrip("/").endswith("/now"):
+            return self._send(200, "text/html; charset=utf-8", now_page.NOW_PAGE.encode())
 
         route = _api_route(u.path)
         if route is not None:
@@ -437,6 +455,8 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, "application/json", json.dumps(live_source.load_sources()).encode())
                 if route == ["schedule"]:
                     return self._send(200, "application/json", json.dumps({"entries": block_render.load_schedule()}).encode())
+                if route == ["now"]:
+                    return self._send(200, "application/json", json.dumps(now_state()).encode())
                 if len(route) == 2 and route[0] == "day":
                     return self._send(200, "application/json", json.dumps(day_program.day_summary(route[1])).encode())
                 if route == ["live_test"]:
