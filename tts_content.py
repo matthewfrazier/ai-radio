@@ -7,6 +7,7 @@ import json
 import re
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 
 import llm_backends  # one-directional: llm_backends imports only stdlib, no cycle
 
@@ -55,15 +56,29 @@ def current_weather(lat, lon, api_key, units="imperial"):
         return json.load(r)
 
 
-def weather_script(place, w):
+def _ordinal(n):
+    suffix = "th" if 11 <= n % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return "%d%s" % (n, suffix)
+
+
+def weather_script(place, w, now=None):
+    # Lead with the local day + the time this was pulled, so it reads like a
+    # live read ("It's Saturday July 18th, and here's the weather as of 8:30 AM
+    # for Astoria."). w["timezone"] is OWM's location UTC offset in seconds.
+    now = now or datetime.now(timezone.utc)
+    local = now.astimezone(timezone.utc) + timedelta(seconds=w.get("timezone", 0))
+    date_str = local.strftime("%A %B ") + _ordinal(local.day)
+    hour12 = local.strftime("%I").lstrip("0") or "12"
+    time_str = "%s:%s %s" % (hour12, local.strftime("%M"), local.strftime("%p"))
     temp = round(w["main"]["temp"])
     feels = round(w["main"]["feels_like"])
     desc = w["weather"][0]["description"]
     wind = round(w.get("wind", {}).get("speed", 0))
     humidity = w["main"]["humidity"]
     return (
-        f"Here's the weather for {place}. Currently {temp} degrees and {desc}. "
-        f"Feels like {feels}. Winds at {wind} miles per hour, humidity {humidity} percent."
+        f"It's {date_str}, and here's the weather as of {time_str} for {place}. "
+        f"Currently {temp} degrees and {desc}. Feels like {feels}. "
+        f"Winds at {wind} miles per hour, humidity {humidity} percent."
     )
 
 

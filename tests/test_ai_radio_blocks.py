@@ -757,6 +757,16 @@ class WeatherScriptTests(unittest.TestCase):
         text = tts_content.weather_script("Nowhere", w)  # must not raise KeyError
         self.assertIn("Nowhere", text)
 
+    def test_script_leads_with_local_day_and_time(self):
+        from datetime import datetime, timezone
+        w = {"main": {"temp": 72, "feels_like": 70, "humidity": 55},
+             "weather": [{"description": "clear"}], "wind": {"speed": 5},
+             "timezone": -14400}  # Astoria/EDT: UTC-4
+        text = tts_content.weather_script("Astoria", w,
+                                          now=datetime(2026, 7, 18, 12, 30, tzinfo=timezone.utc))
+        self.assertIn("Saturday July 18th", text)
+        self.assertIn("8:30 AM", text)
+
 
 class BackendRegistryTests(unittest.TestCase):
     """Unknown ids must fail loudly with ValueError, not a confusing
