@@ -252,6 +252,79 @@ class RenderMergeTests(unittest.TestCase):
         self.assertEqual(result["segments"][0]["resolved"]["url"], "http://x/newscast.mp3")
 
 
+class SelectiveRenderTests(unittest.TestCase):
+    """render_block rebuilds ONLY invalidated segments, so a cutover/scrub
+    within the airing hour reuses already-built live/music/recap and returns
+    near-instantly instead of re-resolving and re-rendering the whole block."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._patches = [
+            patch.object(block_render, "BLOCKS_DIR", self._tmp.name),
+            patch.object(block_render, "STATE_LOCK", os.path.join(self._tmp.name, ".lock")),
+        ]
+        for p in self._patches:
+            p.start()
+
+    def tearDown(self):
+        for p in reversed(self._patches):
+            p.stop()
+        self._tmp.cleanup()
+
+    def _fresh_block(self, bid="20260101T000000"):
+        now = block_render.now_iso()
+        bdir = block_render.block_dir(bid)
+        os.makedirs(bdir, exist_ok=True)
+        with open(os.path.join(bdir, "music_m1.txt"), "w") as f:
+            f.write("file 'x'\n")  # is_music_stale requires the playlist to exist
+        segs = [
+            {"id": "w", "type": "tts", "params": {"topic": "weather", "location": "1", "ttl_s": 1800},
+             "status": "ok", "rendered_at": now, "resolved": {"text": "w"}},
+            {"id": "n1", "type": "live", "params": {"source_id": "npr", "duration_s": 300},
+             "status": "ok", "resolved_at": now,
+             "resolved": {"url": "http://x", "source_id": "npr", "title": "NPR"}},
+            {"id": "m1", "type": "music", "params": {"query": "jazz", "duration_s": 600},
+             "status": "ok", "resolved_at": now,
+             "resolved": {"playlist_path": "music_m1.txt", "title": "jazz", "track_count": 3, "tracks_head": []}},
+            {"id": "r", "type": "tts", "params": {"topic": "recap", "ttl_s": 0},
+             "status": "ok", "rendered_at": now, "resolved": {"text": "r"}},
+        ]
+        block = {"id": bid, "title": "t", "created_at": now, "updated_at": now,
+                 "segments": segs, "schedule": {"state": "draft", "queued_at": None, "aired_at": None}}
+        block_render.save_block(block)
+        return bid
+
+    def _run(self, bid, **kw):
+        with patch.object(block_render, "resolve_live_segment") as rl, \
+             patch.object(block_render, "resolve_music_segment") as rm, \
+             patch.object(block_render, "render_tts_segment") as rt:
+            block_render.render_block(bid, **kw)
+        return rl, rm, rt
+
+    def test_fresh_block_rebuilds_nothing(self):
+        rl, rm, rt = self._run(self._fresh_block())
+        rl.assert_not_called()
+        rm.assert_not_called()
+        rt.assert_not_called()
+
+    def test_aged_live_reresolves_and_rebuilds_only_recap(self):
+        bid = self._fresh_block()
+        b = block_render.load_block(bid)
+        b["segments"][1]["resolved_at"] = "2000-01-01T00:00:00+00:00"  # age the live seg out
+        block_render.save_block(b)
+        rl, rm, rt = self._run(bid)
+        rl.assert_called_once()                       # stale live re-resolved
+        rm.assert_not_called()                        # fresh music reused
+        rt.assert_called_once()                       # recap rebuilt (upstream changed)
+        self.assertEqual(rt.call_args[0][1]["id"], "r")  # the recap, not the fresh weather
+
+    def test_force_rebuilds_everything(self):
+        rl, rm, rt = self._run(self._fresh_block(), force=True)
+        rl.assert_called_once()
+        rm.assert_called_once()
+        self.assertEqual(rt.call_count, 2)            # weather + recap
+
+
 class CleanupTests(unittest.TestCase):
     """cleanup_blocks removes old, unreferenced block dirs and keeps anything
     queued/scheduled or recent -- the disk-hygiene fix for unbounded render

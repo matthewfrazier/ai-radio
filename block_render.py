@@ -60,6 +60,15 @@ DEFAULT_STATION_CFG = {"kokoro": "http://192.168.1.74:8880", "voice": "am_michae
                        "cutover_filler": True,
                        "cutover_filler_text": "Operator switching tracks, one moment."}
 DEFAULT_TTS_TTL_S = 1800
+# How long a resolved live/music segment stays valid before render_block
+# re-resolves it. Kept generous so a cutover/scrub within the airing hour
+# reuses the built segments (near-instant) instead of re-resolving everything;
+# only genuinely aged-out state (a newer bulletin, a changed library) rebuilds.
+# A live bulletin URL is good for its hour; a music search result changes
+# slowly. force=True (manual regenerate) and the natural first render of an
+# unresolved block still rebuild fully. Per-segment override: params.resolved_ttl_s.
+DEFAULT_LIVE_TTL_S = 3600
+DEFAULT_MUSIC_TTL_S = 21600
 
 # Block ids are always minted by new_block_id() as a timestamp (optionally
 # "-N" on same-second collision). Validating the shape here — at the one
@@ -338,17 +347,43 @@ def render_tts_segment(bdir, seg, cfg, context=None):
     seg["rendered_at"] = now_iso()
 
 
+def _age_exceeds(stamp, ttl_s):
+    """True if the ISO timestamp is missing/unparseable or older than ttl_s."""
+    try:
+        t = datetime.fromisoformat(stamp)
+    except Exception:
+        return True
+    return (datetime.now(t.tzinfo) - t).total_seconds() > ttl_s
+
+
 def is_stale(seg):
     if seg["type"] != "tts":
         return False
     if seg.get("status") != "ok":
         return True
     ttl = seg["params"].get("ttl_s", DEFAULT_TTS_TTL_S)
-    try:
-        rendered_at = datetime.fromisoformat(seg["rendered_at"])
-    except Exception:
+    return _age_exceeds(seg.get("rendered_at"), ttl)
+
+
+def is_live_stale(seg):
+    """A live segment needs re-resolving if it isn't resolved yet or its
+    resolved URL has aged out (a newer bulletin may exist)."""
+    if seg.get("status") != "ok" or not (seg.get("resolved") or {}).get("url"):
         return True
-    return (datetime.now(rendered_at.tzinfo) - rendered_at).total_seconds() > ttl
+    ttl = seg["params"].get("resolved_ttl_s", DEFAULT_LIVE_TTL_S)
+    return _age_exceeds(seg.get("resolved_at"), ttl)
+
+
+def is_music_stale(seg, bdir):
+    """A music segment needs re-resolving if it isn't resolved, its playlist
+    file is gone, or the search result has aged out."""
+    if seg.get("status") != "ok":
+        return True
+    pp = (seg.get("resolved") or {}).get("playlist_path")
+    if not (pp and os.path.exists(os.path.join(bdir, pp))):
+        return True
+    ttl = seg["params"].get("resolved_ttl_s", DEFAULT_MUSIC_TTL_S)
+    return _age_exceeds(seg.get("resolved_at"), ttl)
 
 
 def render_block(block_id, force=False):
@@ -357,26 +392,36 @@ def render_block(block_id, force=False):
     bdir = block_dir(block_id)
     changed = False
     prior_sources = []
+    # Whether any content-bearing upstream segment (live/music) actually
+    # re-resolved this pass -- recap/factoid summarize what played, so they
+    # only need rebuilding when their inputs changed (or aren't built yet).
+    upstream_changed = False
     for i, seg in enumerate(block["segments"]):
         try:
-            # live/music are always re-resolved -- cheap config-lookup/ICY-probe
-            # or Jellyfin-list calls, no external cost to worry about like the
-            # weather API, so there's no reason to cache them and every reason
-            # not to: a stale cached URL survives config changes indefinitely
-            # otherwise (e.g. a live-sources.json fix never takes effect on an
-            # already-resolved segment without a manual force-render).
+            # Selective re-render: rebuild a segment ONLY when its own state is
+            # invalidated (unresolved, asset missing, or aged out per its TTL),
+            # so a cutover/scrub within the airing hour reuses already-built
+            # segments and returns near-instantly. force=True (regenerate) and
+            # config changes are picked up on the next rebuild / via force.
             if seg["type"] == "live":
-                resolve_live_segment(seg, prior_sources)
-                changed = True
+                if force or is_live_stale(seg):
+                    resolve_live_segment(seg, prior_sources)
+                    changed = True
+                    upstream_changed = True
             elif seg["type"] == "music":
-                resolve_music_segment(seg, bdir)
-                changed = True
+                if force or is_music_stale(seg, bdir):
+                    resolve_music_segment(seg, bdir)
+                    changed = True
+                    upstream_changed = True
             elif seg["type"] == "tts":
                 topic = seg["params"].get("topic")
-                # recap/factoid depend on what earlier segments resolved to in
-                # THIS pass, so they must re-render every air (ttl_s:0 already
-                # makes is_stale True; the explicit check documents intent).
-                if force or is_stale(seg) or topic in ("recap", "factoid"):
+                if topic in ("recap", "factoid"):
+                    # derived from upstream segments: rebuild only if something
+                    # upstream changed this pass, or it isn't built yet.
+                    if force or upstream_changed or seg.get("status") != "ok":
+                        render_tts_segment(bdir, seg, cfg, {"segments": block["segments"], "index": i})
+                        changed = True
+                elif force or is_stale(seg):
                     render_tts_segment(bdir, seg, cfg, {"segments": block["segments"], "index": i})
                     changed = True
         except Exception as e:
