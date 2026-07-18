@@ -5,6 +5,7 @@ Exposes the knobs that actually shape the broadcast — Kokoro endpoint, voice,
 speed, and the script the DJ reads — auditions voices in-page, then re-renders
 through Kokoro and restarts the Icecast stream. Zero deps (stdlib only)."""
 import glob
+import html
 import json
 import os
 import re
@@ -76,8 +77,11 @@ def icecast_status():
         if isinstance(s, dict):
             s = [s]
         m = s[0]
+        # Icecast's status-json HTML-encodes non-ASCII in the title (em-dash ->
+        # &#8212;, accents -> &#nnn;); decode so /now shows real characters.
+        # (Direct listeners and Cast read the raw ICY title, unaffected.)
         return {"live": True, "listeners": m.get("listeners", 0),
-                "title": m.get("title") or m.get("server_name", "")}
+                "title": html.unescape(m.get("title") or m.get("server_name", ""))}
     except Exception:
         return {"live": False, "listeners": 0}
 

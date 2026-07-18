@@ -99,8 +99,18 @@ def resolve_music(query, limit=200):
             items = search_tracks(base, tok, uid, query, limit=limit)
             title = "Search: " + query
 
-    tracks = [{"id": i["Id"], "name": i.get("Name", i["Id"]), "url": track_url(base, tok, i["Id"])} for i in items]
+    tracks = [{"id": i["Id"], "name": i.get("Name", i["Id"]),
+               "artist": _track_artist(i),
+               "duration_s": round((i.get("RunTimeTicks") or 0) / 10_000_000, 1),
+               "url": track_url(base, tok, i["Id"])} for i in items]
     return {"ref": ref, "title": title, "tracks": tracks, "track_count": len(tracks)}
+
+
+def _track_artist(i):
+    # Jellyfin returns Artists (list) + AlbumArtist by default; prefer the
+    # first track artist, fall back to the album artist.
+    a = i.get("Artists") or []
+    return (a[0] if a else i.get("AlbumArtist")) or ""
 
 
 if __name__ == "__main__":

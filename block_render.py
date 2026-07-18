@@ -82,6 +82,13 @@ def now_iso():
     return datetime.now(timezone.utc).astimezone().isoformat()
 
 
+def track_label(t):
+    """'Artist — Title' (or just Title) for now-playing metadata and the UI."""
+    a = (t.get("artist") or "").strip()
+    n = (t.get("name") or "").strip()
+    return ("%s — %s" % (a, n)) if a else (n or "Music")
+
+
 def load_station_cfg():
     try:
         with open(STATION_CFG) as f:
@@ -301,7 +308,9 @@ def resolve_live_segment(seg, prior_source_ids=()):
                 or srcs)
         sid = pool[0]["id"]
     r = live_source.resolve_live(sid)
-    seg["resolved"] = {"title": r["title"], "url": r["url"], "source_id": sid}
+    src = live_source.get_source(sid) or {}
+    seg["resolved"] = {"title": r["title"], "url": r["url"], "source_id": sid,
+                       "source_name": src.get("name") or sid}
     seg["status"] = "ok"
     seg["resolved_at"] = now_iso()
 
@@ -312,11 +321,21 @@ def resolve_music_segment(seg, bdir):
     with open(os.path.join(bdir, playlist_path), "w") as f:
         for t in r["tracks"]:
             f.write("file '%s'\n" % t["url"])
+    # Per-track metadata for the tracks that will actually air (the concat
+    # producer stops at the segment's -t duration), + one buffer track. Lets
+    # the player push the real artist/title as each track boundary passes, and
+    # a recap name what played.
+    budget = seg["params"].get("duration_s", 900)
+    meta, acc = [], 0.0
+    for t in r["tracks"]:
+        meta.append({"name": t["name"], "artist": t.get("artist", ""),
+                     "duration_s": t.get("duration_s", 0)})
+        acc += t.get("duration_s", 0)
+        if acc >= budget:
+            break
     seg["resolved"] = {"ref": r["ref"], "title": r["title"], "track_count": r["track_count"],
-                        "playlist_path": playlist_path,
-                        # head track names so a recap can name what played and
-                        # the preview UI can label tracks (both otherwise lost).
-                        "tracks_head": [t["name"] for t in r["tracks"][:20]]}
+                        "playlist_path": playlist_path, "tracks": meta,
+                        "tracks_head": [track_label(t) for t in meta[:20]]}
     seg["status"] = "ok"
     seg["resolved_at"] = now_iso()
 
@@ -368,8 +387,11 @@ def is_stale(seg):
 def is_live_stale(seg):
     """A live segment needs re-resolving if it isn't resolved yet or its
     resolved URL has aged out (a newer bulletin may exist)."""
-    if seg.get("status") != "ok" or not (seg.get("resolved") or {}).get("url"):
+    r = seg.get("resolved") or {}
+    if seg.get("status") != "ok" or not r.get("url"):
         return True
+    if "source_name" not in r:
+        return True  # resolved before the friendly source name existed
     ttl = seg["params"].get("resolved_ttl_s", DEFAULT_LIVE_TTL_S)
     return _age_exceeds(seg.get("resolved_at"), ttl)
 
@@ -377,11 +399,14 @@ def is_live_stale(seg):
 def is_music_stale(seg, bdir):
     """A music segment needs re-resolving if it isn't resolved, its playlist
     file is gone, or the search result has aged out."""
+    r = seg.get("resolved") or {}
     if seg.get("status") != "ok":
         return True
-    pp = (seg.get("resolved") or {}).get("playlist_path")
+    pp = r.get("playlist_path")
     if not (pp and os.path.exists(os.path.join(bdir, pp))):
         return True
+    if "tracks" not in r:
+        return True  # resolved before per-track metadata existed -> re-resolve once
     ttl = seg["params"].get("resolved_ttl_s", DEFAULT_MUSIC_TTL_S)
     return _age_exceeds(seg.get("resolved_at"), ttl)
 

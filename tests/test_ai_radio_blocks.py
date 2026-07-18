@@ -282,10 +282,11 @@ class SelectiveRenderTests(unittest.TestCase):
              "status": "ok", "rendered_at": now, "resolved": {"text": "w"}},
             {"id": "n1", "type": "live", "params": {"source_id": "npr", "duration_s": 300},
              "status": "ok", "resolved_at": now,
-             "resolved": {"url": "http://x", "source_id": "npr", "title": "NPR"}},
+             "resolved": {"url": "http://x", "source_id": "npr", "title": "NPR", "source_name": "NPR Newscast"}},
             {"id": "m1", "type": "music", "params": {"query": "jazz", "duration_s": 600},
              "status": "ok", "resolved_at": now,
-             "resolved": {"playlist_path": "music_m1.txt", "title": "jazz", "track_count": 3, "tracks_head": []}},
+             "resolved": {"playlist_path": "music_m1.txt", "title": "jazz", "track_count": 3,
+                          "tracks": [{"name": "T", "artist": "A", "duration_s": 120}], "tracks_head": []}},
             {"id": "r", "type": "tts", "params": {"topic": "recap", "ttl_s": 0},
              "status": "ok", "rendered_at": now, "resolved": {"text": "r"}},
         ]
@@ -323,6 +324,31 @@ class SelectiveRenderTests(unittest.TestCase):
         rl.assert_called_once()
         rm.assert_called_once()
         self.assertEqual(rt.call_count, 2)            # weather + recap
+
+
+class MusicMetadataTests(unittest.TestCase):
+    """Per-track artist/title metadata captured at resolve time so the player
+    can push the real now-playing track as each boundary passes."""
+
+    def test_track_label(self):
+        self.assertEqual(block_render.track_label({"artist": "Air", "name": "Alone"}), "Air — Alone")
+        self.assertEqual(block_render.track_label({"artist": "", "name": "Solo"}), "Solo")
+        self.assertEqual(block_render.track_label({}), "Music")
+
+    def test_resolve_music_captures_per_track_meta_up_to_budget(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        seg = {"id": "m1", "type": "music", "params": {"query": "jazz", "duration_s": 300}}
+        fake = {"ref": "search:jazz", "title": "Search: jazz", "track_count": 5,
+                "tracks": [{"id": str(n), "name": "T%d" % n, "artist": "A%d" % n,
+                            "duration_s": 120, "url": "http://x/%d" % n} for n in range(5)]}
+        with patch.object(block_render.jellyfin_client, "resolve_music", return_value=fake):
+            block_render.resolve_music_segment(seg, tmp.name)
+        r = seg["resolved"]
+        self.assertEqual(len(r["tracks"]), 3)  # 120s tracks, 300s budget -> 3 cover it
+        self.assertEqual(r["tracks"][0], {"name": "T0", "artist": "A0", "duration_s": 120})
+        self.assertEqual(r["tracks_head"][0], "A0 — T0")
+        self.assertEqual(seg["status"], "ok")
 
 
 class CleanupTests(unittest.TestCase):

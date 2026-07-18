@@ -84,14 +84,23 @@ def segment_metadata_title(seg):
     p = seg.get("params") or {}
     t = seg.get("type")
     if t == "music":
+        tracks = r.get("tracks") or []
+        if tracks:
+            return br.track_label(tracks[0])  # per-track push takes over from here
         q = (p.get("query") or "").strip()
         return ("%s music" % q.title()) if q else (r.get("title") or "Music")
     if t == "live":
-        return r.get("title") or p.get("source_id") or "News"
+        return r.get("source_name") or r.get("title") or p.get("source_id") or "News"
     if t == "tts":
         return {"weather": "Weather", "recap": "Station recap",
                 "factoid": "Did you know?"}.get(p.get("topic"), r.get("title") or "Interlude")
     return r.get("title") or "ai-radio"
+
+
+def push_metadata_async(srcpw, title):
+    # Push from a daemon thread so a slow metadata call never stalls the tight
+    # audio-relay loop (a stalled write would stutter the stream).
+    threading.Thread(target=push_metadata, args=(srcpw, title), daemon=True).start()
 
 
 def push_metadata(srcpw, title):
@@ -236,10 +245,24 @@ class Sink:
             pass
 
 
-def run_segment(seg, bdir, sink):
+BYTES_PER_SEC = 44100 * 2 * 2  # s16le stereo -> byte offset == elapsed seconds
+
+
+def run_segment(seg, bdir, sink, srcpw=None):
     if seg.get("status") != "ok":
         log("skip %s seg %s (status=%s)" % (seg.get("type"), seg.get("id"), seg.get("status")))
         return
+    # For music, update the stream title to the real artist/track as each track
+    # boundary passes -- the producer is one concat ffmpeg, so we infer the
+    # current track from bytes written (== elapsed audio). Track 0's title was
+    # already pushed as the segment title, so start at 0 and only push on
+    # advance. Live/tts keep their single segment-level title.
+    tracks = (seg.get("resolved") or {}).get("tracks") if seg.get("type") == "music" else None
+    bounds, acc = [], 0.0
+    for t in (tracks or []):
+        acc += (t.get("duration_s") or 0)
+        bounds.append(acc * BYTES_PER_SEC)
+    written, cur = 0, 0
     proc = subprocess.Popen(segment_cmd(seg, bdir), stdout=subprocess.PIPE)
     try:
         while True:
@@ -250,6 +273,11 @@ def run_segment(seg, bdir, sink):
             if _stop_requested or _skip_block:
                 proc.terminate()
                 break
+            if tracks and srcpw:
+                written += len(chunk)
+                while cur + 1 < len(tracks) and written >= bounds[cur]:
+                    cur += 1
+                    push_metadata_async(srcpw, br.track_label(tracks[cur]))
     finally:
         proc.wait()
 
@@ -436,7 +464,7 @@ def main():
                              "segment_title": (seg.get("resolved") or {}).get("title"),
                              "started_at": br.now_iso()})
                 push_metadata(srcpw, segment_metadata_title(seg))
-                run_segment(seg, bdir, sink)
+                run_segment(seg, bdir, sink, srcpw)
             if _skip_block:
                 log("cutover: abandoning %s, re-reading queue" % block_id)
                 _skip_block = False
