@@ -212,11 +212,21 @@ function tickElapsed(){
   const el=$('elapsed'); if(el) el.textContent=fmtElapsed(airingStartedMs);
 }
 
-function renderNow(st){
-  const card=$('now');
-  if(!st || !st.block_id){
+function renderNow(nowd){
+  const card=$('now'), st=nowd.state||{}, live=(nowd.stream||{}).live;
+  if(!(nowd.player_active && st.block_id)){
+    // No block airing -- say exactly which source is holding the stream.
+    let msg;
+    if(nowd.player_active && st.idle)
+      msg='Idle music — the player is holding the stream between blocks. Queue a block or press ▶ on a segment.';
+    else if(nowd.player_active)
+      msg='Player running, starting up…';
+    else if(live)
+      msg='Static fallback loop — no programmed block is airing.';
+    else
+      msg='Stream offline — no source is connected.';
     card.className='nowcard';
-    card.innerHTML='<span class="sub">No programmed block airing — the static music loop is on.</span>';
+    card.innerHTML='<span class="sub">'+esc(msg)+'</span>';
     $('btnPrev').disabled=true; $('btnNext').disabled=true; $('navMsg').textContent='';
     return;
   }
@@ -275,8 +285,8 @@ async function poll(){
     if(airingIdx!==prevIdx || !airingStartedMs){
       airingStartedMs = st.started_at?Date.parse(st.started_at):(n.player_active?Date.now():0);
     }
-    if(!n.player_active) airingStartedMs=0;
-    renderNow(n.player_active?st:null);
+    if(!n.player_active || !st.block_id) airingStartedMs=0;
+    renderNow(n);
     $('queue').textContent = (n.queue&&n.queue.length)?('Queue: '+n.queue.join(', ')):'Queue empty.';
     // if a block is airing and nothing is picked, show it
     if(airingId && !picked){ $('pick').value=airingId; picked=airingId; loadBlock(picked); }

@@ -299,7 +299,9 @@ def run_idle(sink):
         log("no idle playlist (%s), exiting to fallback" % IDLE_PLAYLIST)
         return False
     log("queue empty -- holding mount with idle music loop")
-    clear_state()  # /now shows the static-loop message; no block is airing
+    # Explicit idle marker (not clear_state) so /now can distinguish "player is
+    # holding the stream with idle music" from "player off, fallback loop on".
+    write_state({"idle": True, "started_at": br.now_iso()})
     proc = subprocess.Popen(idle_cmd(), stdout=subprocess.PIPE)
     try:
         while not _stop_requested and not _skip_block:

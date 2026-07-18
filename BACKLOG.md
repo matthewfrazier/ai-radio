@@ -171,3 +171,47 @@ module + a distillation timer.
 
 This feature is a natural supplier for `DAY_PROGRAMMING.md`'s "factoid /
 trivia" and topical-brief slots.
+
+---
+
+## multi-streamer sync / drift for unified live streams
+
+**Status:** idea (2026-07-18). Prerequisite continuity work is DONE: the
+source now survives every automatic transition without flapping — cutover
+(`--kill-who=main` so SIGHUP hits only the player loop, not the sink ffmpeg),
+air-time render (the cutover filler bumper), and queue-drain (the player holds
+the mount playing idle music instead of handing off to the fallback service).
+So a single listener/Cast can now stay connected indefinitely.
+
+**Goal.** Experiment with multiple simultaneous streamers feeding one logical
+"live" station, and keep them in sync (bounded drift) so a listener can move
+between outputs — the local `<audio>`, a Cast speaker/group, and eventually a
+second box — and hear the same programme at nearly the same wall-clock
+position.
+
+**Why it matters.** Today there is exactly one Icecast source (the block
+player's sink) and one mount. "Never disconnect because it missed the mark"
+is met for a single output; the next step is a *unified* live experience
+across outputs and, later, redundancy (a second streamer that can take over
+without a gap).
+
+**Open questions to investigate (not yet scoped):**
+- What "sync" means here: multiple Icecast mounts fed from one PCM source vs
+  one mount consumed by many clients (clients already share the mount; drift
+  there is just client-buffer, ~seconds). Real divergence appears only with
+  *separate encoders/sources*, so first define the actual multi-streamer
+  topology we want (redundant failover? geographically separate boxes? per-
+  room low-latency?).
+- Drift measurement + correction: shared wall-clock anchor (the block player
+  already stamps `started_at` per segment in `player_state.json`); how much
+  drift is tolerable; resync by trimming/padding at segment boundaries vs
+  continuous PLL-style adjustment.
+- Failover: a standby streamer that mirrors the queue and can seize the mount
+  within the Icecast `source-timeout` window without a listener-visible gap.
+- Cast group sync is partly handled by Google's own group timing; measure it
+  before building our own for the Cast path.
+
+**Touches (likely):** `block_player.py` (source topology, shared timing
+anchor), Icecast config (multiple mounts?), `panel.py`/`/now` (which streamer
+/ which mount a listener is on). No new deps identified yet; this is a
+research item to be scoped before any build.
