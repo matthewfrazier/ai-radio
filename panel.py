@@ -19,6 +19,7 @@ from urllib.parse import urlparse, parse_qs
 from tts_engines import kokoro_voices, kokoro_speech
 import block_render
 import blocks_page
+import day_page
 import day_program
 import hour_templates
 import jellyfin_client
@@ -424,6 +425,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200,"application/json",(p.stdout or '{"sources":[]}').encode())
         if "/api/" not in u.path and u.path.rstrip("/").endswith("/blocks"):
             return self._send(200, "text/html; charset=utf-8", blocks_page.BLOCKS_PAGE.encode())
+        if "/api/" not in u.path and u.path.rstrip("/").endswith("/day"):
+            return self._send(200, "text/html; charset=utf-8", day_page.DAY_PAGE.encode())
 
         route = _api_route(u.path)
         if route is not None:
@@ -545,6 +548,12 @@ class H(BaseHTTPRequestHandler):
                     result = day_program.generate_day(route[1], body.get("template", "standard_hour"),
                                                        body.get("opts"), today=today)
                     return self._send(200, "application/json", json.dumps(result).encode())
+                if len(route) == 3 and route[0] == "day" and route[2] == "bulk":
+                    r = day_program.bulk_edit(route[1], body["field"], body["value"], body.get("hours"))
+                    return self._send(200, "application/json", json.dumps(r).encode())
+                if len(route) == 4 and route[0] == "day" and route[2] == "hour":
+                    block = day_program.patch_hour(route[1], route[3], body)
+                    return self._send(200, "application/json", json.dumps(block).encode())
                 if route == ["llm_test"]:
                     text = llm_backends.generate(body["backend"], body["model"], body["prompt"])
                     return self._send(200, "application/json", json.dumps({"text": text}).encode())

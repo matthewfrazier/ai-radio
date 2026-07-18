@@ -140,13 +140,18 @@ def build_recap_text(params, context):
         raise RuntimeError("recap preview is only available in whole-block preview")
     tracks = _prior_music_tracks(context, params.get("scope", "music"))
     want_factoid = bool(params.get("include_factoid"))
+    seed = params.get("factoid_seed", "")
+    if want_factoid and seed:
+        factoid_clause = " Then add one short, accurate factoid about %s." % seed
+    elif want_factoid:
+        factoid_clause = " Then add one short, accurate factoid about one of these songs or artists."
+    else:
+        factoid_clause = ""
     prompt = (
         "Write a warm radio recap of about 100 words (~40 seconds spoken) of the music "
         "just played, naming a few of these tracks and inviting the listener to stay. "
         "Use only these track names, invent nothing. No preamble. %s%s\nTracks: %s"
-        % (_PLAIN,
-           " Then add one short, accurate factoid about one of these songs or artists."
-           if want_factoid else "",
+        % (_PLAIN, factoid_clause,
            ", ".join(tracks[:8]) if tracks else "(the recent set)")
     )
     text = _try_llm(params, prompt)

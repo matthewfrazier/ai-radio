@@ -51,7 +51,7 @@ a{color:#3b82f6}
 .dayBtn.on{background:#3b82f6;color:#fff;border-color:#3b82f6}
 </style></head><body>
 <h1>Programming blocks</h1>
-<div class="sub"><a href="/admin">&larr; station control</a> &middot; ai-radio</div>
+<div class="sub"><a href="/admin">&larr; station control</a> &middot; <a href="/day">24-hour day</a> &middot; ai-radio</div>
 
 <section>
   <div class="hd2"><h2>Blocks</h2></div>

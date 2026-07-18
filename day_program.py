@@ -108,6 +108,46 @@ def day_summary(date_str):
     return {"date": date_str, "hours": hours}
 
 
+def patch_hour(date_str, hour, patch):
+    """Apply an operator quick-edit to one generated hour, targeting segments
+    by role so the operator never hand-builds segments. Recognized keys:
+    music [q1,q2], weather_location, factoid_seed, recap (bool -> include
+    factoid), voice (all tts). Returns the saved block."""
+    bid = _block_id(date_str, int(hour))
+    block = block_render.load_block(bid)
+    by_role = {s.get("role"): s for s in block["segments"]}
+    if "music" in patch:
+        for role, q in zip(("music_1", "music_2"), patch["music"]):
+            if role in by_role:
+                by_role[role]["params"]["query"] = q
+    if "weather_location" in patch and "weather" in by_role:
+        by_role["weather"]["params"]["location"] = patch["weather_location"]
+    if "factoid_seed" in patch and "recap_mid" in by_role:
+        by_role["recap_mid"]["params"]["factoid_seed"] = patch["factoid_seed"]
+    if "recap" in patch and "recap_mid" in by_role:
+        by_role["recap_mid"]["params"]["include_factoid"] = bool(patch["recap"])
+    if "voice" in patch:
+        for s in block["segments"]:
+            if s["type"] == "tts":
+                s["params"]["voice"] = patch["voice"]
+    block["updated_at"] = block_render.now_iso()
+    block_render.save_block(block)
+    return block
+
+
+def bulk_edit(date_str, field, value, hours=None):
+    """Apply one field to many generated hours (default all 24)."""
+    target = list(range(24)) if hours is None else [int(h) for h in hours]
+    changed = []
+    for h in target:
+        try:
+            patch_hour(date_str, h, {field: value})
+            changed.append(h)
+        except FileNotFoundError:
+            pass
+    return {"date": date_str, "field": field, "changed": changed}
+
+
 def delete_day(date_str):
     """Remove a generated day's blocks (except the airing one) and its schedule
     entries."""
