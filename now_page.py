@@ -51,6 +51,11 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
 #target{flex:1;min-width:11rem}
 .mb4{margin:0 0 .4rem}
+.runlog{font:.72rem/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;background:#8881;border-radius:8px;padding:.5rem .6rem;max-height:14rem;overflow:auto}
+.runlog .lt{opacity:.55;margin-right:.5rem}
+.runlog .k{color:#3b82f6}
+.runlog .w{color:#f59e0b}
+.nowcard.switching{border-color:#f59e0b;background:rgba(245,158,11,.10)}
 </style></head><body>
 <h1>ai-radio &middot; now</h1>
 <div class="sub"><a href="/admin">station</a> &middot; <a href="/blocks">blocks</a> &middot; <a href="/day">24-hour day</a></div>
@@ -92,6 +97,12 @@ button:disabled{opacity:.4;cursor:not-allowed}
   <div id="blockView" style="margin-top:.6rem"></div>
 </section>
 
+<section>
+  <div class="hd2"><h2>Run log</h2></div>
+  <div class="sub mb4">Recent player events — why the stream did what it did (cutovers, render/filler, idle, drain).</div>
+  <div id="runlog" class="runlog">loading…</div>
+</section>
+
 <script>
 const $=id=>document.getElementById(id);
 const BASE=location.pathname.replace(/\/+$/,'');
@@ -101,6 +112,10 @@ let picked="", airingId="", airingIdx=-1, airingCount=0, airingStartedMs=0;
 // The server persists the active cast target, so poll() can restore this state
 // on a page refresh instead of forgetting it and defaulting to local.
 let outputTarget="", castUuid="", castName="";
+// When a cutover is in flight (▶ / prev / next), the player takes several
+// seconds to render before the new segment airs. Track it so the now-card
+// shows an explicit "switching → segment N" state instead of looking dead.
+let switching=null; // {id, idx, since}
 
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
@@ -125,7 +140,7 @@ function segEntity(seg, blockId, airing, idx){
       +(r.url?`<br><a href="${esc(r.url)}" target="_blank">stream url</a> &middot; ${esc(r.title||'')}`:'');
   } else if(seg.type==='music'){
     detail=`${esc(r.title||p.query||'shuffle')} &middot; ${esc(r.track_count||0)} tracks &middot; ${esc(p.duration_s||0)}s`
-      +(r.tracks_head&&r.tracks_head.length?`<div class="tracks">${esc(r.tracks_head.slice(0,8).join(' &middot; '))}${r.tracks_head.length>8?' …':''}</div>`:'');
+      +(r.tracks_head&&r.tracks_head.length?`<div class="tracks">${r.tracks_head.slice(0,8).map(esc).join(' &middot; ')}${r.tracks_head.length>8?' …':''}</div>`:'');
   } else if(seg.type==='tts'){
     detail=`topic: ${esc(p.topic||'?')}${r.duration_s?(' &middot; '+esc(Math.round(r.duration_s))+'s'):''}${r.rendered_at?(' &middot; rendered '+esc(r.rendered_at.slice(11,19))):''}`
       +(r.text?`<div class="quote">${esc(r.text)}</div>`:'')
@@ -182,6 +197,11 @@ $('pick').onchange=()=>inspect($('pick').value);
 // The player keeps the Icecast source fed with a spoken filler across the
 // air-time render, so a cast stays connected through the switch.
 async function playFrom(id, idx){
+  // Reflect the intermediate state immediately -- the cutover renders for a
+  // few seconds before the new segment airs, so without this the UI looks
+  // like the button did nothing.
+  switching={id, idx, since:Date.now()};
+  paintSwitching();
   const tick=tickerFor($('switchMsg'),20000);
   tick.set('cutting over to segment '+(idx+1));
   try{
@@ -190,7 +210,7 @@ async function playFrom(id, idx){
       body:JSON.stringify({mode:'now',prerender:false,start_index:idx}),signal:tick.signal});
     if(!r.ok) throw new Error((await r.text())||('HTTP '+r.status));
     tick.done('switched — starts at segment '+(idx+1)+' after render');
-  }catch(e){ tick.fail(e); return; }
+  }catch(e){ switching=null; tick.fail(e); return; }
   // Only the LOCAL player needs to reconnect to the freshly-switched stream
   // (cache-buster forces a new connection). A cast is independent and rides
   // through the render on the filler, so leave it alone -- reconnecting local
@@ -212,8 +232,25 @@ function tickElapsed(){
   const el=$('elapsed'); if(el) el.textContent=fmtElapsed(airingStartedMs);
 }
 
+function paintSwitching(){
+  if(!switching) return;
+  const card=$('now');
+  card.className='nowcard on switching';
+  card.innerHTML='<div class="line1"><span class="badge">switching</span>'
+    +'<span class="segt">&rarr; segment '+(switching.idx+1)+'</span></div>'
+    +'<div class="meta">cutting over &amp; rendering — audio resumes in a few seconds…</div>';
+  $('btnPrev').disabled=true; $('btnNext').disabled=true; $('navMsg').textContent='switching…';
+}
+
 function renderNow(nowd){
   const card=$('now'), st=nowd.state||{}, live=(nowd.stream||{}).live;
+  // Clear the switching state once the target segment is actually airing (or
+  // after a 35s guard, in case the target errored/was skipped).
+  if(switching){
+    const arrived = nowd.player_active && st.block_id===switching.id && (st.segment_index??-1)===switching.idx;
+    if(arrived || (Date.now()-switching.since)>35000) switching=null;
+    else { paintSwitching(); return; }
+  }
   if(!(nowd.player_active && st.block_id)){
     // No block airing -- say exactly which source is holding the stream.
     let msg;
@@ -297,6 +334,23 @@ async function poll(){
 $('btnPrev').onclick=()=>{ if(airingId && airingIdx>0) playFrom(airingId, airingIdx-1); };
 $('btnNext').onclick=()=>{ if(airingId && airingCount && airingIdx<airingCount-1) playFrom(airingId, airingIdx+1); };
 
+// --- Run log (recent player events) ---
+function logClass(m){
+  if(/cutover|render gap|idle|drain|exiting|sink/.test(m)) return 'w';
+  if(/airing block|segment /.test(m)) return 'k';
+  return '';
+}
+async function loadLog(){
+  try{
+    const rows=await (await fetch(BASE+'/api/log')).json();
+    const el=$('runlog');
+    el.innerHTML = rows.length
+      ? rows.map(r=>`<div class="${logClass(r.m)}"><span class="lt">${esc(r.t)}</span>${esc(r.m)}</div>`).join('')
+      : '<span class="sub">no recent events</span>';
+    el.scrollTop=el.scrollHeight;
+  }catch(e){}
+}
+
 // --- Output (local OR one cast speaker, mutually exclusive) ---
 async function loadTargets(){
   const tick=tickerFor($('outMsg'),20000); tick.set('scanning for speakers');
@@ -367,8 +421,10 @@ $('player').addEventListener('play',()=>{
   await loadPicker();
   await poll();
   loadTargets();  // slow (~8s discovery); runs in the background
+  loadLog();
   setInterval(poll, 4000);
   setInterval(tickElapsed, 1000);
+  setInterval(loadLog, 5000);
   setInterval(loadPicker, 20000);
 })();
 </script>

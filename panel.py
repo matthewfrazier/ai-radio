@@ -391,6 +391,25 @@ def _player_active():
     return subprocess.run(["systemctl", "is-active", "--quiet", PLAYER_UNIT]).returncode == 0
 
 
+def player_log(n=30):
+    """Recent block-player events for the /now run log, so the operator can see
+    WHY the stream did what it did (cutover, render/filler, idle, drain). Reads
+    journald and keeps only our own 'block_player:' narrative lines."""
+    try:
+        p = subprocess.run(
+            ["journalctl", "-u", PLAYER_UNIT, "-n", "400", "--no-pager", "-o", "short-iso"],
+            capture_output=True, text=True, timeout=5)
+        out = []
+        for ln in p.stdout.splitlines():
+            if "block_player:" not in ln:
+                continue
+            # short-iso line: "2026-07-18T20:01:02+0000 host unit[pid]: block_player: msg"
+            out.append({"t": ln[11:19], "m": ln.split("block_player:", 1)[1].strip()})
+        return out[-n:]
+    except Exception as e:
+        return [{"t": "", "m": "log unavailable: %s" % e}]
+
+
 def _start_player():
     # systemd's Conflicts= stops the static writ-stream loop for us.
     subprocess.run(["systemctl", "start", PLAYER_UNIT], capture_output=True)
@@ -529,6 +548,8 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, "application/json", json.dumps({"entries": block_render.load_schedule()}).encode())
                 if route == ["now"]:
                     return self._send(200, "application/json", json.dumps(now_state()).encode())
+                if route == ["log"]:
+                    return self._send(200, "application/json", json.dumps(player_log()).encode())
                 if route == ["cast", "devices"]:
                     return self._send(200, "application/json", json.dumps(_cast("list")).encode())
                 if len(route) == 2 and route[0] == "day":

@@ -262,6 +262,8 @@ def render_with_filler(block_id, sink, cfg):
 
     t = threading.Thread(target=_do)
     t.start()
+    spoken = "spoken bumper" if cfg.get("cutover_filler", True) else "silence"
+    log("render gap: %s while %s renders (holds the source so no underrun)" % (spoken, block_id))
     proc = subprocess.Popen(_filler_cmd(cfg), stdout=subprocess.PIPE)
     try:
         while t.is_alive() and not _stop_requested:
