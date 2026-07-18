@@ -35,7 +35,7 @@ a{color:#3b82f6}
 .dot.gen{background:#22c55e}
 </style></head><body>
 <h1>Day programming</h1>
-<div class="sub"><a href="/admin">&larr; station</a> &middot; <a href="/blocks">blocks</a> &middot; <a href="/now">now / monitor</a> &middot; 24-hour schedule</div>
+<div class="sub"><a href="/admin">&larr; station</a> &middot; <a href="/blocks">blocks</a> &middot; <a href="/now">▶ now · listen · cast</a> &middot; 24-hour schedule</div>
 
 <section>
   <div class="hd2"><h2>Day</h2></div>

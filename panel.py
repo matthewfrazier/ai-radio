@@ -144,7 +144,7 @@ audio{width:100%;margin-top:.4rem}
 a{color:#3b82f6}
 </style></head><body>
 <h1>WRIT-FM control</h1>
-<div class="sub">ai-radio &middot; <a href="/blocks">blocks</a> &middot; <a href="/day">24-hour day</a> &middot; <a href="/now">now / monitor</a></div>
+<div class="sub">ai-radio &middot; <a href="/blocks">blocks</a> &middot; <a href="/day">24-hour day</a> &middot; <a href="/now">▶ now · listen · cast</a></div>
 
 <div class="status">
   <span><span id="kdot" class="dot"></span>Kokoro <span id="kstate">?</span></span>
