@@ -415,6 +415,20 @@ class DayProgramTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             day_program.day_summary("nope")
 
+    def test_generate_uses_station_default_weather_and_recap_backend(self):
+        # station.json defaults flow into generated hours (weather location +
+        # recap LLM backend), so the /day button produces working weather.
+        cfg = os.path.join(self._tmpdir.name, "station.json")
+        with open(cfg, "w") as f:
+            json.dump({"weather_location": "11106", "recap_llm_backend": "claude",
+                       "recap_llm_model": "claude-haiku-4-5"}, f)
+        with patch.object(block_render, "STATION_CFG", cfg):
+            day_program.generate_day("2026-07-18")
+        b = block_render.load_block("20260718T090000")
+        by = {s.get("role"): s for s in b["segments"]}
+        self.assertEqual(by["weather"]["params"]["location"], "11106")
+        self.assertEqual(by["recap_mid"]["params"]["llm_backend"], "claude")
+
 
 class SchedulerTests(unittest.TestCase):
     """due_entries is a pure function so the firing logic is testable without

@@ -7,6 +7,26 @@ item is scheduled for a build.
 
 ---
 
+## web-search-augmented factoids (Ollama tools) + Claude-vs-Ollama A/B test
+
+**Status:** idea (2026-07-18). Recaps/factoids currently run on Claude
+(`recap_llm_backend=claude` station default); Ollama is available but its
+factoids are ungrounded (parametric memory only, higher hallucination risk on
+specifics).
+
+**Goal.** Give the Ollama backend web-search / tool-use so its factoids are
+grounded in retrieved facts rather than memory, then run an A/B test of
+Claude vs tool-augmented Ollama for recap/factoid quality (accuracy,
+liveliness, latency, cost) and pick the default per-slot.
+
+**Notes.** Ollama's `/api/chat` supports tools; would need a search tool
+(the project has no web-fetch/search dependency today — this is where one
+would enter, scoped to the tool call). The A/B harness can reuse the existing
+`llm_backends` registry and the deterministic fallback. Ties into the
+news-distillation feature below (shared grounding/retrieval).
+
+---
+
 ## news-topic distillation → 70-second research briefs
 
 **Status:** investigated 2026-07-18 (agent report below); ready to schedule
