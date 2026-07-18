@@ -19,6 +19,7 @@ from urllib.parse import urlparse, parse_qs
 from tts_engines import kokoro_voices, kokoro_speech
 import block_render
 import blocks_page
+import day_program
 import hour_templates
 import jellyfin_client
 import live_source
@@ -433,6 +434,8 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, "application/json", json.dumps(live_source.load_sources()).encode())
                 if route == ["schedule"]:
                     return self._send(200, "application/json", json.dumps({"entries": block_render.load_schedule()}).encode())
+                if len(route) == 2 and route[0] == "day":
+                    return self._send(200, "application/json", json.dumps(day_program.day_summary(route[1])).encode())
                 if route == ["live_test"]:
                     q = parse_qs(u.query)
                     r = live_source.resolve_live(q.get("source_id", [""])[0])
@@ -537,6 +540,11 @@ class H(BaseHTTPRequestHandler):
                 if route == ["schedule"]:
                     block_render.save_schedule(body.get("entries", []))
                     return self._send(200, "application/json", json.dumps({"ok": True, "entries": block_render.load_schedule()}).encode())
+                if len(route) == 3 and route[0] == "day" and route[2] == "generate":
+                    today = datetime.now().strftime("%Y-%m-%d")
+                    result = day_program.generate_day(route[1], body.get("template", "standard_hour"),
+                                                       body.get("opts"), today=today)
+                    return self._send(200, "application/json", json.dumps(result).encode())
                 if route == ["llm_test"]:
                     text = llm_backends.generate(body["backend"], body["model"], body["prompt"])
                     return self._send(200, "application/json", json.dumps({"text": text}).encode())
@@ -579,6 +587,11 @@ class H(BaseHTTPRequestHandler):
             try:
                 delete_block_safe(route[1])
                 return self._send(200, "application/json", json.dumps({"ok": True}).encode())
+            except Exception as e:
+                return self._send(502, "text/plain", str(e).encode())
+        if route is not None and len(route) == 2 and route[0] == "day":
+            try:
+                return self._send(200, "application/json", json.dumps(day_program.delete_day(route[1])).encode())
             except Exception as e:
                 return self._send(502, "text/plain", str(e).encode())
         self._send(404, "text/plain", b"not found")

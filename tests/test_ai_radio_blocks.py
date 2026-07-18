@@ -21,6 +21,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import block_render  # noqa: E402
+import day_program  # noqa: E402
 import hour_templates  # noqa: E402
 import jellyfin_client  # noqa: E402
 import live_source  # noqa: E402
@@ -350,6 +351,69 @@ class HourTemplateTests(unittest.TestCase):
         overnight = next(s for s in hour_templates.build_hour(3) if s["role"] == "music_1")["params"]["query"]
         evening = next(s for s in hour_templates.build_hour(20) if s["role"] == "music_1")["params"]["query"]
         self.assertNotEqual(overnight, evening)
+
+
+class DayProgramTests(unittest.TestCase):
+    """generate_day: 24 deterministic-id blocks + 24 hourly entries,
+    idempotent regen, past-day prune, summary, delete."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        base = self._tmpdir.name
+        self._patches = [
+            patch.object(block_render, "BLOCKS_DIR", os.path.join(base, "program_blocks")),
+            patch.object(block_render, "QUEUE_FILE", os.path.join(base, "block_queue.json")),
+            patch.object(block_render, "SCHEDULE_FILE", os.path.join(base, "schedule.json")),
+            patch.object(block_render, "STATE_LOCK", os.path.join(base, ".state.lock")),
+        ]
+        for p in self._patches:
+            p.start()
+        os.makedirs(block_render.BLOCKS_DIR)
+
+    def tearDown(self):
+        for p in reversed(self._patches):
+            p.stop()
+        self._tmpdir.cleanup()
+
+    def test_generate_makes_24_blocks_and_entries(self):
+        r = day_program.generate_day("2026-07-18")
+        self.assertEqual(len(r["blocks"]), 24)
+        self.assertEqual(r["blocks"][14], "20260718T140000")
+        b = block_render.load_block("20260718T140000")
+        self.assertEqual(b["template"]["hour"], 14)
+        self.assertEqual(len(b["segments"]), 9)
+        self.assertEqual(len(block_render.load_schedule()), 24)
+
+    def test_regenerate_is_idempotent(self):
+        day_program.generate_day("2026-07-18")
+        day_program.generate_day("2026-07-18")
+        self.assertEqual(len(block_render.load_schedule()), 24)
+        self.assertEqual(len(os.listdir(block_render.BLOCKS_DIR)), 24)
+
+    def test_generate_prunes_past_day_entries(self):
+        day_program.generate_day("2026-07-17", today="2026-07-18")
+        day_program.generate_day("2026-07-18", today="2026-07-18")
+        eids = {e["id"] for e in block_render.load_schedule()}
+        self.assertTrue(eids and all(e.startswith("gen-2026-07-18-") for e in eids))
+
+    def test_day_summary(self):
+        day_program.generate_day("2026-07-18")
+        s = day_program.day_summary("2026-07-18")
+        self.assertEqual(len(s["hours"]), 24)
+        self.assertTrue(all(h["generated"] for h in s["hours"]))
+        self.assertEqual(len(s["hours"][14]["news"]), 4)  # 3 templated + auto
+
+    def test_delete_day(self):
+        day_program.generate_day("2026-07-18")
+        day_program.delete_day("2026-07-18")
+        self.assertEqual(block_render.load_schedule(), [])
+        self.assertEqual(os.listdir(block_render.BLOCKS_DIR), [])
+
+    def test_bad_date_rejected(self):
+        with self.assertRaises(ValueError):
+            day_program.generate_day("../evil")
+        with self.assertRaises(ValueError):
+            day_program.day_summary("nope")
 
 
 class SchedulerTests(unittest.TestCase):
