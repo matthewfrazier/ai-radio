@@ -462,24 +462,30 @@ class HourTemplateTests(unittest.TestCase):
     """build_hour materializes the standard hour with role tags + per-hour
     variation (genre by day-part, rotating news lead)."""
 
-    def test_standard_hour_shape_and_roles(self):
+    def test_default_hour_has_no_live_news(self):
+        # News is OFF by default (interruptive); music absorbs the freed time.
         segs = hour_templates.build_hour(9)
+        roles = [s["role"] for s in segs]
+        self.assertEqual(roles, ["weather", "music_1", "recap_mid", "music_2", "recap_hour"])
+        self.assertFalse(any(s["type"] == "live" for s in segs))
+        m1 = next(s for s in segs if s["role"] == "music_1")
+        self.assertEqual(m1["params"]["duration_s"],
+                         hour_templates.MUSIC_1_S + hour_templates.NEWS_OFF_MUSIC_BONUS_S)
+
+    def test_include_news_restores_bulletin_slots(self):
+        segs = hour_templates.build_hour(9, {"include_news": True})
         roles = [s["role"] for s in segs]
         self.assertEqual(roles, ["weather", "news_1", "news_2", "music_1", "news_3",
                                  "recap_mid", "music_2", "news_fresh", "recap_hour"])
-        types = {s["role"]: s["type"] for s in segs}
-        self.assertEqual(types["weather"], "tts")
-        self.assertEqual(types["news_1"], "live")
-        self.assertEqual(types["music_1"], "music")
-        self.assertEqual(types["recap_mid"], "tts")
+        self.assertEqual(next(s for s in segs if s["role"] == "news_1")["type"], "live")
         # news_fresh is the disjoint "auto" source
-        nf = next(s for s in segs if s["role"] == "news_fresh")
-        self.assertEqual(nf["params"]["source_id"], "auto")
+        self.assertEqual(next(s for s in segs if s["role"] == "news_fresh")["params"]["source_id"], "auto")
 
     def test_news_lead_rotates_by_hour(self):
-        lead0 = next(s for s in hour_templates.build_hour(0) if s["role"] == "news_1")["params"]["source_id"]
-        lead1 = next(s for s in hour_templates.build_hour(1) if s["role"] == "news_1")["params"]["source_id"]
-        self.assertNotEqual(lead0, lead1)
+        def lead(h):
+            return next(s for s in hour_templates.build_hour(h, {"include_news": True})
+                        if s["role"] == "news_1")["params"]["source_id"]
+        self.assertNotEqual(lead(0), lead(1))
 
     def test_music_genre_varies_by_daypart(self):
         overnight = next(s for s in hour_templates.build_hour(3) if s["role"] == "music_1")["params"]["query"]
@@ -515,7 +521,7 @@ class DayProgramTests(unittest.TestCase):
         self.assertEqual(r["blocks"][14], "20260718T140000")
         b = block_render.load_block("20260718T140000")
         self.assertEqual(b["template"]["hour"], 14)
-        self.assertEqual(len(b["segments"]), 9)
+        self.assertEqual(len(b["segments"]), 5)  # news off by default
         self.assertEqual(len(block_render.load_schedule()), 24)
 
     def test_regenerate_is_idempotent(self):
@@ -535,7 +541,7 @@ class DayProgramTests(unittest.TestCase):
         s = day_program.day_summary("2026-07-18")
         self.assertEqual(len(s["hours"]), 24)
         self.assertTrue(all(h["generated"] for h in s["hours"]))
-        self.assertEqual(len(s["hours"][14]["news"]), 4)  # 3 templated + auto
+        self.assertEqual(s["hours"][14]["news"], [])  # news off by default
 
     def test_delete_day(self):
         day_program.generate_day("2026-07-18")
