@@ -7,6 +7,40 @@ item is scheduled for a build.
 
 ---
 
+## custom Cast receiver — on-device metadata + native controls
+
+**Status:** idea (2026-07-18). Needs a Google Cast Application ID (operator
+registers; one-time).
+
+**Why.** Per-segment/per-track metadata is now pushed as Icecast ICY title and
+shows on `/now` and to direct listeners, but the Chromecast **Default Media
+Receiver** does NOT surface ICY track updates — it displays only the title set
+at load time ("ai-radio") — and exposes no skip control for a single LIVE item.
+Verified the stream advertises ICY (`icy-metaint:16000`); the limitation is the
+default receiver, not the stream.
+
+**What a custom receiver unlocks.** A small HTML/JS receiver app hosted on the
+box (reachable by the device over the LAN, HTTPS): (1) shows real now-playing
+by polling `/api/now` (or parsing ICY), including artwork; (2) exposes custom
+transport buttons whose taps come back over a Cast custom message channel to
+the panel — **skip forward = the existing next-segment cutover**, plus restart,
+prev, and cast-stop. This is the proper unlock for both live metadata display
+and device-native controls.
+
+**Dependency / effort.** Register a Cast Application ID in the Google Cast
+Developer Console (operator's Google account, ~$5 one-time) and point it at the
+receiver URL served from the box. Build: the receiver HTML/JS + a custom
+message namespace handler in the panel (or `cast_ctl`) mapping button events to
+the existing `/api/blocks/{id}/schedule` cutover and `/api/cast/*` actions.
+`cmd_start` would launch this app ID instead of the default receiver.
+
+**Interim (already works).** Skip-forward while casting is available today from
+`/now`: the ▶ next-segment / per-segment ▶ buttons cut the station over, and
+since the Cast plays the station `/stream`, the speaker skips too (the
+cutover no longer drops the cast). It's just a web-UI remote, not on-device.
+
+---
+
 ## cast to Google Nest / Home devices
 
 **Status:** BUILT 2026-07-18 (direct pychromecast). Remaining: optional Home
