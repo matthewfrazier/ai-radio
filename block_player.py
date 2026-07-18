@@ -33,6 +33,7 @@ FIFO_PATH = os.path.join(BASE, ".block_sink.fifo")
 STUBENV = os.path.join(BASE, ".stubenv")
 STATE_FILE = os.path.join(BASE, "player_state.json")
 FILLER_WAV = os.path.join(BASE, ".cutover_filler.wav")
+IDLE_PLAYLIST = os.path.join(BASE, "music_playlist.txt")
 
 _stop_requested = False
 _skip_block = False
@@ -277,6 +278,44 @@ def render_with_filler(block_id, sink, cfg):
     return result["block"]
 
 
+def idle_cmd():
+    # The same looped local-music playlist the static writ-stream fallback
+    # plays, but decoded to raw PCM for our persistent sink instead of its own
+    # Icecast source -- so idle playout holds the SAME mount and never flaps.
+    return ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin", "-re",
+            "-stream_loop", "-1",
+            "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
+            "-f", "concat", "-safe", "0", "-i", IDLE_PLAYLIST,
+            "-f", "s16le", "-ar", "44100", "-ac", "2", "-"]
+
+
+def run_idle(sink):
+    """Hold the mount with the idle music loop while the queue is empty, so the
+    Icecast source never drops between programming. Returns when a block is
+    queued or a stop is requested. Returns False if idle playback can't run
+    (no playlist, or the producer died) -- the caller then exits and lets the
+    fallback service take the mount, i.e. the pre-existing handoff behaviour."""
+    if not os.path.exists(IDLE_PLAYLIST):
+        log("no idle playlist (%s), exiting to fallback" % IDLE_PLAYLIST)
+        return False
+    log("queue empty -- holding mount with idle music loop")
+    clear_state()  # /now shows the static-loop message; no block is airing
+    proc = subprocess.Popen(idle_cmd(), stdout=subprocess.PIPE)
+    try:
+        while not _stop_requested and not _skip_block:
+            if br.load_queue():
+                return True
+            chunk = proc.stdout.read(65536)
+            if not chunk:
+                log("idle producer ended unexpectedly, exiting to fallback")
+                return False
+            sink.write(chunk)
+    finally:
+        proc.terminate()
+        proc.wait()
+    return True
+
+
 def open_sink(srcpw, attempts=25, delay=0.2):
     # Tolerate the Icecast mount-release lag during a fallback<->player
     # handoff: systemd's Conflicts= stops the other source, but the mount may
@@ -304,8 +343,14 @@ def main():
         while not _stop_requested:
             queue = br.load_queue()
             if not queue:
-                log("queue drained")
-                break
+                # Don't exit (which would hand the mount to the fallback
+                # service and flap the source, killing any Cast). Hold the
+                # mount playing idle music until a block is queued. Only exit
+                # if idle playout itself can't run.
+                if not run_idle(sink):
+                    log("queue drained")
+                    break
+                continue
             block_id = queue[0]
             cfg = br.load_station_cfg()
             try:
