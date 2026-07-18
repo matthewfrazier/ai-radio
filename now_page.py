@@ -55,7 +55,8 @@ pre{white-space:pre-wrap;background:#8881;padding:.6rem;border-radius:8px;font-s
 </section>
 
 <section>
-  <div class="hd2"><h2>Inspect block</h2></div>
+  <div class="hd2"><h2>Switch block</h2></div>
+  <div class="sub" style="margin:0 0 .4rem">Selecting a block cuts the station over to it now.</div>
   <select id="pick"></select>
   <div id="blockView" style="margin-top:.6rem"></div>
 </section>
@@ -119,7 +120,27 @@ async function loadPicker(){
     + list.map(b=>`<option value="${esc(b.id)}">${esc(b.title)} (${b.segment_count} seg &middot; ${esc(b.schedule.state)})</option>`).join('');
   if(prev) sel.value=prev;
 }
-$('pick').onchange=()=>{ picked=$('pick').value; loadBlock(picked); };
+// Selecting a block SWITCHES the station to it (play-now) and reconnects the
+// player to the newly-switched live source. Only fires on a real user pick --
+// the poll sets the dropdown's value programmatically, which does not trigger
+// onchange, so auto-reflecting the airing block never causes a cutover.
+async function switchTo(id){
+  picked=id;
+  if(!id){ loadBlock(''); return; }
+  loadBlock(id);
+  if(id===airingId) return;  // already airing -> just inspect, don't re-cut
+  $('now').innerHTML='<span class="sub">switching to <b>'+esc(id)+'</b>… (the new hour renders for a few seconds before audio resumes)</span>';
+  // fire-and-forget with prerender:false so the POST returns immediately; the
+  // player does the single air-time render and the poll shows it airing.
+  fetch(BASE+'/api/blocks/'+id+'/schedule',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'now',prerender:false})})
+    .catch(e=>{ $('now').innerHTML='<span class="sub">switch failed: '+esc(e)+'</span>'; });
+  // reconnect the audio to the switched stream (cache-buster forces a fresh
+  // connection so it picks up the new source once its sink is airing).
+  const a=$('player');
+  setTimeout(()=>{ a.src='/stream?ts='+Date.now(); a.load(); a.play().catch(()=>{}); }, 5000);
+}
+$('pick').onchange=()=>switchTo($('pick').value);
 
 async function poll(){
   try{

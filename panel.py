@@ -342,11 +342,14 @@ def _cutover_player():
     subprocess.run(["systemctl", "kill", "-s", "HUP", PLAYER_UNIT], capture_output=True)
 
 
-def schedule_block(block_id, mode):
-    # Render now so resolve/render errors surface in the UI immediately; the
-    # player re-renders again at air time, so a block that waits in the queue
-    # never airs stale content.
-    block_render.render_block(block_id, force=False)
+def schedule_block(block_id, mode, prerender=True):
+    # prerender surfaces resolve/render errors in the UI immediately (the
+    # /blocks schedule button wants that). The /now live switcher passes
+    # prerender=False so the cutover POST returns fast -- the player does the
+    # single air-time render either way, so this just avoids a wasteful double
+    # render and a ~13s blocking request.
+    if prerender:
+        block_render.render_block(block_id, force=False)
     if mode == "now":
         block_render.queue_now(block_id)  # overwrite: play-now drops the rest of the queue
         if _player_active():
@@ -602,7 +605,8 @@ class H(BaseHTTPRequestHandler):
                     result = block_render.render_block(route[1], force=bool(body.get("force")))
                     return self._send(200, "application/json", json.dumps(result).encode())
                 if len(route) == 3 and route[0] == "blocks" and route[2] == "schedule":
-                    result = schedule_block(route[1], body.get("mode", "queue"))
+                    result = schedule_block(route[1], body.get("mode", "queue"),
+                                            prerender=body.get("prerender", True))
                     return self._send(200, "application/json", json.dumps(result).encode())
             except FileNotFoundError:
                 return self._send(404, "text/plain", b"not found")
