@@ -394,11 +394,37 @@ def _cast_stream_url():
 def _cast(*args, timeout=40):
     if not os.path.exists(CAST_PY):
         return {"error": "cast not installed (.venv-cast missing)"}
-    p = subprocess.run([CAST_PY, CAST_CTL, *args], capture_output=True, text=True, timeout=timeout)
+    try:
+        p = subprocess.run([CAST_PY, CAST_CTL, *args], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"state": "failed", "hint": "the speaker didn't respond in time -- it may be "
+                "asleep or off. Wake it (tap the screen / Home app) and try again."}
     try:
         return json.loads(p.stdout.strip() or "{}")
     except Exception:
         return {"error": (p.stdout or p.stderr or "cast error").strip()[:200]}
+
+
+# Repeated cast attempts to one uuid within a short window escalate the connect
+# budget -- a stubborn speaker often connects on a later, longer, try.
+_cast_attempts = {}
+
+
+def _cast_device(uuid):
+    """Cached host/port/model/name for a uuid so cast_ctl can cold-start
+    (connect straight to the last-known address) instead of waiting on mDNS."""
+    for d in (cast_devices() or []):
+        if isinstance(d, dict) and d.get("uuid") == uuid:
+            host, _, port = (d.get("host") or "").rpartition(":")
+            return host, port, d.get("model") or "", d.get("name") or ""
+    return "", "", "", ""
+
+
+def _cast_budget(uuid):
+    now = time.time()
+    hist = [t for t in _cast_attempts.get(uuid, []) if now - t < 90] + [now]
+    _cast_attempts[uuid] = hist
+    return min(12 + (len(hist) - 1) * 6, 24)  # 12s, 18s, 24s cap, within a 90s window
 
 
 def now_state():
@@ -707,7 +733,11 @@ class H(BaseHTTPRequestHandler):
                                                        body.get("opts"), today=today)
                     return self._send(200, "application/json", json.dumps(result).encode())
                 if route == ["cast", "start"]:
-                    r = _cast("start", body["uuid"], _cast_stream_url(), "audio/mpeg")
+                    uuid = body["uuid"]
+                    host, port, model, name = _cast_device(uuid)
+                    budget = _cast_budget(uuid)
+                    r = _cast("start", uuid, _cast_stream_url(), "audio/mpeg",
+                              host, port, model, name, str(budget), timeout=budget * 2 + 30)
                     ok = r.get("state") in ("PLAYING", "BUFFERING")
                     _log_cast("start %s -> %s%s" % (
                         r.get("name") or body.get("uuid", "?"), r.get("state") or r.get("error") or "?",
