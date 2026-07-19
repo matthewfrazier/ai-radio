@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import block_presets  # noqa: E402
 import block_render  # noqa: E402
+import overlay  # noqa: E402
 import day_program  # noqa: E402
 import hour_templates  # noqa: E402
 import jellyfin_client  # noqa: E402
@@ -355,6 +356,59 @@ class BlockPresetsTests(unittest.TestCase):
     def test_unknown_preset_raises(self):
         with self.assertRaises(ValueError):
             block_presets.build_preset("nope", {})
+
+
+class OverlayTests(unittest.TestCase):
+    """The music-DNA overlay: derived axes + AcousticBrainz/Essentia high-level
+    model mapping + provenance-aware writes."""
+
+    HL = {
+        "mood_happy": {"all": {"happy": 0.8, "not_happy": 0.2}},
+        "mood_sad": {"all": {"sad": 0.2, "not_sad": 0.8}},
+        "mood_aggressive": {"all": {"aggressive": 0.6, "not_aggressive": 0.4}},
+        "mood_party": {"all": {"party": 0.7, "not_party": 0.3}},
+        "mood_relaxed": {"all": {"relaxed": 0.3, "not_relaxed": 0.7}},
+        "danceability": {"all": {"danceable": 0.65, "not_danceable": 0.35}},
+        "mood_acoustic": {"all": {"acoustic": 0.1, "not_acoustic": 0.9}},
+        "voice_instrumental": {"all": {"instrumental": 0.05, "voice": 0.95}},
+    }
+
+    def test_derived(self):
+        self.assertEqual(overlay.era_from_year(1994), "1990s")
+        self.assertIsNone(overlay.era_from_year(None))
+        self.assertEqual([overlay.tempo_band(b) for b in (80, 100, 120, 140)],
+                         ["slow", "mid", "up", "fast"])
+
+    def test_axes_from_features(self):
+        a = overlay.axes_from_features(self.HL, bpm=122)
+        self.assertEqual(a["valence"], 0.8)                     # from mood_happy
+        self.assertAlmostEqual(a["energy"], round((0.6 + 0.7 + 0.7) / 3, 3))
+        self.assertEqual(a["danceability"], 0.65)
+        self.assertEqual(a["acousticness"], 0.1)
+        self.assertEqual(a["instrumental"], 0.05)
+        self.assertEqual(a["tempo_bpm"], 122.0)
+        self.assertEqual(a["tempo_band"], "up")
+
+    def test_axes_robust_to_missing_models(self):
+        self.assertEqual(overlay.axes_from_features({}, bpm=None), {})
+
+    def test_set_axes_respects_higher_confidence(self):
+        ov = {"tracks": {}}
+        overlay.set_axes(ov, "x", {"energy": 0.9}, "essentia", 0.9)
+        overlay.set_axes(ov, "x", {"energy": 0.1}, "acousticbrainz", 0.8)  # lower conf, ignored
+        self.assertEqual(ov["tracks"]["x"]["energy"], 0.9)
+        self.assertEqual(ov["tracks"]["x"]["provenance"]["energy"]["src"], "essentia")
+
+    def test_ingest_essentia(self):
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        json.dump({"jid1": {"highlevel": self.HL, "rhythm": {"bpm": 128}}}, tmp)
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        ov = {"tracks": {}}
+        n = overlay.ingest_essentia(tmp.name, ov)
+        self.assertEqual(n, 1)
+        self.assertEqual(ov["tracks"]["jid1"]["tempo_bpm"], 128.0)
+        self.assertEqual(ov["tracks"]["jid1"]["provenance"]["energy"]["src"], "essentia")
 
 
 class MusicMetadataTests(unittest.TestCase):

@@ -71,3 +71,8 @@ schedule.json
 player_state.json
 library_snapshot.json
 library_snapshot.json.tmp
+overlay.json
+overlay.json.tmp
+tracklist.json
+features.json
+.mbid_cache.json
