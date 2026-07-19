@@ -256,7 +256,10 @@ function wireEditor(){
       if(f==='topic') renderEditor();  // topic change swaps the visible fields
     };
   });
-  bv.querySelectorAll('[data-play]').forEach(el=>{ el.onclick=()=>playFrom(curBlock.id, +el.dataset.play); });
+  bv.querySelectorAll('[data-play]').forEach(el=>{ el.onclick=async()=>{
+    el.disabled=true; const t=el.textContent; el.textContent='⋯';
+    try{ await playFrom(curBlock.id, +el.dataset.play); } finally{ el.disabled=false; el.textContent=t; }
+  }; });
   bv.querySelectorAll('[data-del]').forEach(el=>{ el.onclick=()=>{ curBlock.segments.splice(+el.dataset.del,1); renderEditor(); }; });
   bv.querySelectorAll('[data-mv]').forEach(el=>{ el.onclick=()=>moveSeg(+el.dataset.i, +el.dataset.mv); });
   $('editHead').querySelectorAll('[data-add]').forEach(el=>{ el.onclick=()=>addSeg(el.dataset.add); });
@@ -519,18 +522,24 @@ async function stopCast(uuid){
 // Switch output to `v` ("local" or a cast uuid), stopping whatever was playing
 // before -- only one destination is ever active.
 async function applyTarget(v){
-  const a=$('player');
+  // Stateful button so it's obvious the click registered and something is
+  // in flight (the cast handshake can take several seconds). Disable while
+  // trying; restore on done/fail.
+  const a=$('player'), btn=$('btnOut'), sel=$('target');
+  btn.disabled=true; sel.disabled=true;
+  const restore=()=>{ btn.disabled=false; sel.disabled=false; btn.textContent='Play'; };
   if(v==='local'){
+    btn.textContent='Starting…';
     if(castUuid){ stopCast(castUuid); castUuid=''; }
     outputTarget='local';
     a.src='/stream?ts='+Date.now(); a.load(); a.play().catch(()=>{});
     $('outMsg').textContent='playing on this device';
-    return;
+    restore(); return;
   }
-  // casting: stop local audio + any previous speaker, then cast to v
+  btn.textContent='Connecting…';
   a.pause();
   if(castUuid && castUuid!==v){ stopCast(castUuid); }
-  const tick=tickerFor($('outMsg'),40000); tick.set('casting');
+  const tick=tickerFor($('outMsg'),40000); tick.set('connecting to speaker');
   try{
     const r=await (await fetch(BASE+'/api/cast/start',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({uuid:v}),signal:tick.signal})).json();
@@ -539,6 +548,7 @@ async function applyTarget(v){
       tick.done('casting to '+esc(r.name)+' ('+r.state.toLowerCase()+')'); }
     else { tick.done('could not cast'+(r.hint?': '+esc(r.hint):' (state '+esc(r.state||'?')+')')); }
   }catch(e){ tick.fail(e); }
+  finally{ restore(); }
 }
 
 $('btnOut').onclick=()=>applyTarget($('target').value);

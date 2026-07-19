@@ -314,14 +314,15 @@ def build_tts_text(topic, params, context=None):
 def resolve_live_segment(seg, prior_source_ids=()):
     sid = seg["params"]["source_id"]
     if sid == "auto":
-        # pick a bulletin not already used earlier in this block; prefer real
-        # bulletins (podcast_latest) over full-channel relays, then anything
-        # unused, then fall back to the whole list.
+        # Pick a genuine short bulletin (podcast_latest) not already used
+        # earlier in this block. NEVER fall back to full-channel "(live)"
+        # relays like CNN -- those are endless and interruptive. If every
+        # bulletin is already used, reuse one; only if there are no bulletins
+        # at all do we fall back to the whole list.
         used = set(prior_source_ids)
         srcs = live_source.load_sources()
-        pool = ([s for s in srcs if s["id"] not in used and s.get("kind") == "podcast_latest"]
-                or [s for s in srcs if s["id"] not in used]
-                or srcs)
+        bulletins = [s for s in srcs if s.get("kind") == "podcast_latest"]
+        pool = [s for s in bulletins if s["id"] not in used] or bulletins or srcs
         sid = pool[0]["id"]
     r = live_source.resolve_live(sid)
     src = live_source.get_source(sid) or {}
