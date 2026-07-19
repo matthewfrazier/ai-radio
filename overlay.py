@@ -363,7 +363,10 @@ if __name__ == "__main__":
         import jellyfin_client as jc
         snap = load_snapshot()
         base, tok, uid = jc.auth()
-        urls = {t["id"]: jc.track_url(base, tok, t["id"]) for t in snap["tracks"]}
+        # static=true serves the ORIGINAL file (no on-demand transcode -- ~20x
+        # faster than stream.mp3; Essentia decodes the source format directly).
+        urls = {t["id"]: "%s/Audio/%s/stream?static=true&api_key=%s" % (base, t["id"], tok)
+                for t in snap["tracks"]}
         path = sys.argv[2] if len(sys.argv) > 2 else os.path.join(BASE, "tracklist.json")
         with open(path, "w") as f:
             json.dump({"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
