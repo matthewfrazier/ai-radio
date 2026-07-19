@@ -94,6 +94,32 @@ def build_weather_text(location):
     return weather_script(place, w), place
 
 
+def _station_now(params):
+    tz = params.get("timezone") or "America/New_York"
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(tz))
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+def build_time_check_text(params):
+    """Deterministic spoken time check, e.g. 'It's 8:30 AM on WRIT-FM.'"""
+    name = params.get("station_name") or "WRIT-FM"
+    now = _station_now(params)
+    hour12 = now.strftime("%I").lstrip("0") or "12"
+    t = "%s:%s %s" % (hour12, now.strftime("%M"), now.strftime("%p"))
+    return "It's %s on %s." % (t, name), "time check"
+
+
+def build_station_id_text(params):
+    """Short branded station ident. Optional 'tagline' param customizes it."""
+    name = params.get("station_name") or "WRIT-FM"
+    tag = (params.get("tagline") or "").strip()
+    text = "%s. %s." % (name, tag) if tag else "You're listening to %s." % name
+    return text, "station ID"
+
+
 # --- AI-mediated recap / factoid (LLM with deterministic fallback) ---
 
 def _aired_tracks(seg):

@@ -58,7 +58,9 @@ DEFAULT_STATION_CFG = {"kokoro": "http://192.168.1.74:8880", "voice": "am_michae
                        # Cast/clients never underrun; a spoken espeak bumper while debugging
                        # (set false post-release to fall back to silence). See block_player.
                        "cutover_filler": True,
-                       "cutover_filler_text": "Operator switching tracks, one moment."}
+                       "cutover_filler_text": "Operator switching tracks, one moment.",
+                       # station identity for time-check / station-ID tts segments.
+                       "station_name": "WRIT-FM", "timezone": "America/New_York"}
 DEFAULT_TTS_TTL_S = 1800
 # How long a resolved live/music segment stays valid before render_block
 # re-resolves it. Kept generous so a cutover/scrub within the airing hour
@@ -308,6 +310,10 @@ def build_tts_text(topic, params, context=None):
         return tts_content.build_recap_text(params, context)
     if topic == "factoid":
         return tts_content.build_factoid_text(params, context)
+    if topic == "time_check":
+        return tts_content.build_time_check_text(params)
+    if topic == "station_id":
+        return tts_content.build_station_id_text(params)
     raise ValueError(f"unknown tts topic: {topic}")
 
 
@@ -358,7 +364,12 @@ def resolve_music_segment(seg, bdir):
 
 
 def render_tts_segment(bdir, seg, cfg, context=None):
-    text, title = build_tts_text(seg["params"]["topic"], seg["params"], context)
+    # station identity flows in for time_check / station_id (per-segment
+    # override still wins if the params carry their own).
+    params = dict(seg["params"])
+    params.setdefault("station_name", cfg.get("station_name", "WRIT-FM"))
+    params.setdefault("timezone", cfg.get("timezone", "America/New_York"))
+    text, title = build_tts_text(params["topic"], params, context)
     engine = seg["params"].get("engine", "kokoro")
     voice = seg["params"].get("voice") or cfg.get("voice", "am_michael")
     speed = seg["params"].get("speed") or cfg.get("speed", 1.0)
@@ -463,6 +474,10 @@ def render_block(block_id, force=False):
                     if force or upstream_changed or seg.get("status") != "ok":
                         render_tts_segment(bdir, seg, cfg, {"segments": block["segments"], "index": i})
                         changed = True
+                elif topic == "time_check":
+                    # the spoken time changes every air -> always rebuild.
+                    render_tts_segment(bdir, seg, cfg, {"segments": block["segments"], "index": i})
+                    changed = True
                 elif force or is_stale(seg):
                     render_tts_segment(bdir, seg, cfg, {"segments": block["segments"], "index": i})
                     changed = True

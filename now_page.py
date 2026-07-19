@@ -162,7 +162,7 @@ function tickerFor(el,timeoutMs){
 function statusDot(st){return st==='ok'?'ok':(st==='error'?'bad':'');}
 
 let curBlock=null, voiceOpts=[], sourceOpts=[];  // working copy + voice/source lists
-const TTS_TOPICS=['weather','recap','factoid','freeform'];
+const TTS_TOPICS=['weather','recap','factoid','freeform','time_check','station_id'];
 
 // <select> from [{value,label}] items with the given current value selected.
 function optSel(dataf, i, current, items){
@@ -179,6 +179,7 @@ function segFields(seg, i){
       +`<label>voice${optSel('voice', i, p.voice||'', voiceItems)}</label>`;
     if(topic==='weather') f+=`<label>location<input data-f="location" data-i="${i}" value="${esc(p.location||'')}" placeholder="zip / city"></label>`;
     if(topic==='freeform') f+=`<label>prompt<input data-f="prompt" data-i="${i}" value="${esc(p.prompt||'')}"></label>`;
+    if(topic==='station_id') f+=`<label>tagline<input data-f="tagline" data-i="${i}" value="${esc(p.tagline||'')}" placeholder="optional"></label>`;
     return f;
   }
   if(seg.type==='music'){

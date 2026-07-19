@@ -788,6 +788,18 @@ class WeatherScriptTests(unittest.TestCase):
         text = tts_content.weather_script("Nowhere", w)  # must not raise KeyError
         self.assertIn("Nowhere", text)
 
+    def test_time_check_and_station_id(self):
+        t, title = tts_content.build_time_check_text({"station_name": "WRIT-FM", "timezone": "UTC"})
+        self.assertIn("WRIT-FM", t)
+        self.assertEqual(title, "time check")
+        self.assertTrue("AM" in t or "PM" in t)
+        d, _ = tts_content.build_station_id_text({"station_name": "WRIT-FM"})
+        self.assertIn("WRIT-FM", d)
+        tag, _ = tts_content.build_station_id_text({"station_name": "WRIT-FM", "tagline": "all vibes"})
+        self.assertIn("all vibes", tag)
+        # dispatch through block_render.build_tts_text
+        self.assertIn("Z", block_render.build_tts_text("station_id", {"station_name": "Z"})[0])
+
     def test_script_leads_with_local_day_and_time(self):
         from datetime import datetime, timezone
         w = {"main": {"temp": 72, "feels_like": 70, "humidity": 55},
