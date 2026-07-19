@@ -37,6 +37,15 @@ DEFAULT_SOURCES = [
     {"id": "dw_brief", "name": "DW News Brief", "kind": "podcast_latest",
      "feed_url": "https://rss.dw.com/syndication/feeds/podcast_en_newsbrief.33191-mrss.xml",
      "homepage": "https://www.dw.com/en/dw-news/program-262267"},
+    # Long-form talk: latest full episode of a talk/podcast show. Same
+    # podcast_latest resolution as the bulletins, but category:"talk" keeps
+    # them OUT of the news_fresh "auto" rotation (that only wants short
+    # bulletins) -- pick them explicitly and give the segment a longer
+    # duration_s (~25-50 min). Add more here the same way.
+    {"id": "nyt_daily", "name": "The Daily (NYT)", "kind": "podcast_latest", "category": "talk",
+     "feed_url": "https://feeds.simplecast.com/54nAGcIl", "homepage": "https://www.nytimes.com/column/the-daily"},
+    {"id": "on_the_media", "name": "On the Media (WNYC)", "kind": "podcast_latest", "category": "talk",
+     "feed_url": "https://feeds.feedburner.com/onthemedia", "homepage": "https://www.wnycstudios.org/podcasts/otm"},
     # The rest are full 24/7 live channel relays, not short bulletins -- the
     # "(live)" suffix keeps the UI honest (a live segment bounded by its
     # configured duration_s airs whatever is on-air then, not a news brief).

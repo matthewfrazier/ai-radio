@@ -327,7 +327,9 @@ def resolve_live_segment(seg, prior_source_ids=()):
         # at all do we fall back to the whole list.
         used = set(prior_source_ids)
         srcs = live_source.load_sources()
-        bulletins = [s for s in srcs if s.get("kind") == "podcast_latest"]
+        # short bulletins only -- exclude long-form talk (category:"talk").
+        bulletins = [s for s in srcs
+                     if s.get("kind") == "podcast_latest" and s.get("category") != "talk"]
         pool = [s for s in bulletins if s["id"] not in used] or bulletins or srcs
         sid = pool[0]["id"]
     r = live_source.resolve_live(sid)

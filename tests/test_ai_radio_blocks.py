@@ -488,6 +488,19 @@ class AutoSourceTests(unittest.TestCase):
         self.assertEqual(seg["resolved"]["source_id"], "bbc_world")  # npr used -> next bulletin
         self.assertEqual(seg["status"], "ok")
 
+    def test_auto_never_picks_talk_source(self):
+        # long-form talk (category:"talk") must be excluded from the bulletin
+        # rotation even when it's the only unused source -> reuse a bulletin.
+        srcs = [{"id": "npr", "kind": "podcast_latest"},
+                {"id": "nyt_daily", "kind": "podcast_latest", "category": "talk"}]
+        seg = {"type": "live", "params": {"source_id": "auto", "duration_s": 300}}
+        with patch.object(block_render.live_source, "load_sources", return_value=srcs), \
+             patch.object(block_render.live_source, "get_source", return_value={"name": "NPR"}), \
+             patch.object(block_render.live_source, "resolve_live",
+                          side_effect=lambda sid: {"title": sid, "url": "http://x"}):
+            block_render.resolve_live_segment(seg, prior_source_ids=["npr"])
+        self.assertEqual(seg["resolved"]["source_id"], "npr")
+
 
 class HourTemplateTests(unittest.TestCase):
     """build_hour materializes the standard hour with role tags + per-hour
