@@ -26,7 +26,7 @@ import os
 import sys
 import tempfile
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 
 # The eight Discogs-EffNet classification heads we map to our axes. Each head
 # .pb outputs [p(class), p(not-class)] for the two-class model named in the
@@ -65,8 +65,8 @@ def analyze(url, embed, heads):
         emb = embed(MonoLoader(filename=tmp, sampleRate=16000, resampleQuality=4)())
         hl = {}
         for ab_name, _pb, classes in HEADS:
-            preds = heads[ab_name](emb)          # frames x 2
-            mean = [sum(col) / len(col) for col in zip(*preds)]
+            preds = heads[ab_name](emb)          # frames x 2 (numpy float32)
+            mean = [float(sum(col) / len(col)) for col in zip(*preds)]
             hl[ab_name] = {"all": {classes[0]: round(mean[0], 4), classes[1]: round(mean[1], 4)}}
         # BPM at 44.1k (RhythmExtractor wants the full-rate signal)
         bpm = float(RhythmExtractor2013(method="multifeature")(MonoLoader(filename=tmp)())[0])
@@ -78,40 +78,62 @@ def analyze(url, embed, heads):
             pass
 
 
+# Each worker PROCESS loads its own models (TF predictors aren't safe to share
+# across threads); cap TF threads so N workers don't oversubscribe the cores.
+_EMBED = None
+_HEADS = None
+
+
+def _init(models_dir, intraop):
+    global _EMBED, _HEADS
+    os.environ["TF_NUM_INTRAOP_THREADS"] = str(intraop)
+    os.environ["TF_NUM_INTEROP_THREADS"] = "1"
+    _EMBED, _HEADS = _load_models(models_dir)
+
+
+def _work(item):
+    jid, url = item
+    try:
+        return jid, analyze(url, _EMBED, _HEADS)
+    except Exception as e:
+        return jid, {"error": str(e)[:140]}
+
+
 def main():
     tl_path = sys.argv[1] if len(sys.argv) > 1 else "tracklist.json"
     out_path = sys.argv[2] if len(sys.argv) > 2 else "features.json"
     models_dir = sys.argv[3] if len(sys.argv) > 3 else "models"
-    workers = int(sys.argv[4]) if len(sys.argv) > 4 else 4
+    workers = int(sys.argv[4]) if len(sys.argv) > 4 else 8
 
-    urls = json.load(open(tl_path))["tracks"]
-    out = json.load(open(out_path)) if os.path.exists(out_path) else {}
-    todo = [(jid, u) for jid, u in urls.items() if jid not in out]
-    print("analyzing %d tracks (%d already done), %d workers" % (len(todo), len(out), workers))
-    embed, heads = _load_models(models_dir)
+    with open(tl_path) as f:
+        urls = json.load(f)["tracks"]
+    out = {}
+    if os.path.exists(out_path):
+        with open(out_path) as f:
+            out = json.load(f)
+    todo = [(jid, u) for jid, u in urls.items() if jid not in out or "error" in out[jid]]
+    intraop = max(1, (os.cpu_count() or 8) // max(1, workers))
+    print("analyzing %d tracks (%d already done), %d workers x %d TF threads"
+          % (len(todo), len(out), workers, intraop), flush=True)
 
-    done = [0]
-
-    def work(item):
-        jid, url = item
-        try:
-            out[jid] = analyze(url, embed, heads)
-        except Exception as e:
-            print("  fail %s: %s" % (jid, str(e)[:80]))
-        done[0] += 1
-        if done[0] % 100 == 0:
-            tmp = out_path + ".tmp"
-            with open(tmp, "w") as f:
-                json.dump(out, f)
-            os.replace(tmp, out_path)
-            print("  %d/%d" % (done[0], len(todo)))
-
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        list(ex.map(work, todo))
+    done, fails = 0, 0
+    with ProcessPoolExecutor(max_workers=workers, initializer=_init,
+                             initargs=(models_dir, intraop)) as ex:
+        for jid, feat in ex.map(_work, todo, chunksize=4):
+            out[jid] = feat
+            done += 1
+            if "error" in feat:
+                fails += 1
+            if done % 100 == 0:
+                tmp = out_path + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(out, f)
+                os.replace(tmp, out_path)
+                print("  %d/%d (%d failed)" % (done, len(todo), fails), flush=True)
     with open(out_path, "w") as f:
         json.dump(out, f)
-    print("wrote %s (%d tracks). Pull it to the station and run: overlay.py essentia %s"
-          % (out_path, len(out), out_path))
+    print("wrote %s (%d total, %d failed this run). On the station: overlay.py essentia %s"
+          % (out_path, len(out), fails, out_path), flush=True)
 
 
 if __name__ == "__main__":
