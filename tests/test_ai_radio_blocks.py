@@ -410,6 +410,29 @@ class OverlayTests(unittest.TestCase):
         self.assertEqual(ov["tracks"]["jid1"]["tempo_bpm"], 128.0)
         self.assertEqual(ov["tracks"]["jid1"]["provenance"]["energy"]["src"], "essentia")
 
+    def test_live_detection_strong_signals_only(self):
+        live = ["Comfortably Numb - Live", "Such Great Heights (Live at Leeds)",
+                "MTV Unplugged", "Song [Live]", "Set The Controls (Live in Boston)"]
+        studio = ["Live Wire", "Live and Let Die", "Live Forever", "Alive",
+                  "Living on a Prayer", "Livewire"]
+        for name in live:
+            self.assertTrue(overlay.is_live({"name": name}), "should be live: %s" % name)
+        for name in studio:
+            self.assertFalse(overlay.is_live({"name": name}), "should be studio: %s" % name)
+        # album-level and tag signals also count
+        self.assertTrue(overlay.is_live({"name": "Track 3", "album": "At The BBC"}))
+        self.assertTrue(overlay.is_live({"name": "x", "tags": ["live"]}))
+
+    def test_enrich_live_flags_and_defaults_studio(self):
+        snap = {"tracks": [{"id": "a", "name": "Song (Live at Wembley)"},
+                           {"id": "b", "name": "Live Wire"}]}
+        ov = {"tracks": {}}
+        n = overlay.enrich_live(snap, ov)
+        self.assertEqual(n, 1)
+        self.assertTrue(ov["tracks"]["a"]["live"])
+        self.assertEqual(ov["tracks"]["a"]["provenance"]["live"]["src"], "meta:title")
+        self.assertNotIn("b", ov["tracks"])  # studio default -> no entry/flag
+
 
 class MusicMetadataTests(unittest.TestCase):
     """Per-track artist/title metadata captured at resolve time so the player
@@ -434,6 +457,56 @@ class MusicMetadataTests(unittest.TestCase):
         self.assertEqual(r["tracks"][0], {"name": "T0", "artist": "A0", "duration_s": 120})
         self.assertEqual(r["tracks_head"][0], "A0 — T0")
         self.assertEqual(seg["status"], "ok")
+
+
+class NowPlayingStateTests(unittest.TestCase):
+    """The /now card must follow the CURRENT track inside a music segment, not
+    the frozen resolve-time segment label (the 'Coil by Toad the Wet Sprocket'
+    bug). track_state mirrors the airing track into player_state; now_state
+    passes those fields through to /now."""
+
+    def test_track_state_merges_current_track(self):
+        import block_player
+        base = {"block_id": "b1", "segment_index": 2, "segment_type": "music",
+                "segment_title": "Playlist: 00. Toad The Wet Sprocket - Coil",
+                "started_at": "SEG-START"}
+        tracks = [{"artist": "Air", "name": "Alone"}, {"artist": "Boards", "name": "Roygbiv"}]
+        s0 = block_player.track_state(base, tracks, 0)
+        self.assertEqual(s0["track_index"], 0)
+        self.assertEqual(s0["track_count"], 2)
+        self.assertEqual(s0["track_title"], "Air — Alone")
+        self.assertEqual(s0["started_at"], "SEG-START")   # segment fields preserved
+        self.assertEqual(s0["block_id"], "b1")
+        self.assertIn("track_started_at", s0)
+        s1 = block_player.track_state(base, tracks, 1)     # advance
+        self.assertEqual(s1["track_index"], 1)
+        self.assertEqual(s1["track_title"], "Boards — Roygbiv")
+
+    def test_track_state_out_of_range_is_safe(self):
+        import block_player
+        s = block_player.track_state({"block_id": "b"}, [], 0)
+        self.assertEqual(s["track_count"], 0)
+        self.assertEqual(s["track_title"], "Music")
+
+    def test_now_state_passes_track_fields(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        sf = os.path.join(tmp.name, "player_state.json")
+        with open(sf, "w") as f:
+            json.dump({"block_id": "b1", "segment_index": 1, "segment_count": 3,
+                       "segment_type": "music", "segment_title": "Playlist: X",
+                       "track_index": 4, "track_count": 9, "track_title": "Air — Alone"}, f)
+        with patch.object(panel, "PLAYER_STATE_FILE", sf), \
+             patch.object(panel, "_player_active", return_value=True), \
+             patch.object(panel, "icecast_status", return_value={"live": True, "listeners": 2}), \
+             patch.object(panel, "_cast_target_read", return_value=None), \
+             patch.object(panel.block_render, "load_queue", return_value=[]):
+            n = panel.now_state()
+        st = n["state"]
+        self.assertEqual(st["track_title"], "Air — Alone")   # the real airing track
+        self.assertEqual(st["track_index"], 4)
+        self.assertEqual(st["track_count"], 9)
+        self.assertTrue(n["player_active"])
 
 
 class CleanupTests(unittest.TestCase):

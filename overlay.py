@@ -11,6 +11,7 @@ axes_from_features(), so both fill the identical schema.
 
 CLI:
   python3 overlay.py derived                 # era from year (free, all tracks)
+  python3 overlay.py live                     # flag live recordings from metadata
   python3 overlay.py acousticbrainz [N]      # MB->AB pass over first N tracks
   python3 overlay.py essentia <features.json># ingest rac/Essentia output
   python3 overlay.py tags [backend model N]  # LLM mood/theme tags (Claude default)
@@ -139,6 +140,46 @@ def enrich_derived(snap, ov):
         e = era_from_year(t.get("year"))
         if e:
             set_axes(ov, t["id"], {"era": e}, "derived:year", 1.0)
+            n += 1
+    return n
+
+
+# ---------------- live-vs-studio pass (metadata) --------------------------
+# The audio classifier has no live/studio head, so flag live recordings from
+# title/album/tags. STRONG signals only -- studio songs whose title merely
+# contains 'live' (Live Wire, Live and Let Die, Alive) must NOT be flagged.
+# Studio is the default (flag absent): the station prefers airing studio takes.
+_LIVE_PAREN = re.compile(r"[(\[][^)\]]*\blive\b[^)\]]*[)\]]", re.IGNORECASE)
+_LIVE_PHRASE = re.compile(
+    r"\blive (?:at|in|from|on|@|bootleg|session|sessions|version|recording|"
+    r"recordings|edit|cut|album|set|performance|concert|ep)\b"
+    r"|\bunplugged\b|\bin concert\b|\bat the bbc\b|\bpeel session",
+    re.IGNORECASE)
+_LIVE_END = re.compile(r"[-–:]\s*live\s*$", re.IGNORECASE)
+
+
+def _live_hit(s):
+    s = (s or "").strip()
+    return bool(_LIVE_PAREN.search(s) or _LIVE_PHRASE.search(s) or _LIVE_END.search(s))
+
+
+def is_live(track):
+    """True if metadata marks this a live recording (studio is the default)."""
+    tags = track.get("tags")
+    tagstr = " ".join(tags) if isinstance(tags, list) else str(tags or "")
+    if re.search(r"(^|[,;])\s*live\s*($|[,;])", tagstr, re.IGNORECASE):
+        return True
+    return _live_hit(track.get("name")) or _live_hit(track.get("album"))
+
+
+def enrich_live(snap, ov):
+    at = time.strftime("%Y-%m-%d")
+    n = 0
+    for t in snap["tracks"]:
+        if is_live(t):
+            e = ov["tracks"].setdefault(t["id"], {})
+            e["live"] = True
+            e.setdefault("provenance", {})["live"] = {"src": "meta:title", "conf": 0.7, "at": at}
             n += 1
     return n
 
@@ -322,14 +363,18 @@ def stats(snap, ov):
     total = len(snap["tracks"])
     cov = {a: 0 for a in axes}
     srcs = {}
+    live_n = 0
     for t in ov["tracks"].values():
         for a in axes:
             if a in t:
                 cov[a] += 1
+        if t.get("live"):
+            live_n += 1
         for p in (t.get("provenance") or {}).values():
             srcs[p["src"]] = srcs.get(p["src"], 0) + 1
     return {"tracks_total": total, "tracks_in_overlay": len(ov["tracks"]),
             "coverage": {a: "%d (%.0f%%)" % (cov[a], 100 * cov[a] / total if total else 0) for a in axes},
+            "live": "%d (%.1f%%)" % (live_n, 100 * live_n / total if total else 0),
             "by_source": srcs}
 
 
@@ -342,6 +387,12 @@ if __name__ == "__main__":
         n = enrich_derived(snap, ov)
         save_overlay(ov)
         print("derived era for %d tracks" % n)
+    elif cmd == "live":
+        snap = load_snapshot()
+        n = enrich_live(snap, ov)
+        save_overlay(ov)
+        print("live: flagged %d of %d tracks (%.1f%%)" % (n, len(snap["tracks"]),
+              100 * n / len(snap["tracks"]) if snap["tracks"] else 0))
     elif cmd == "acousticbrainz":
         snap = load_snapshot()
         lim = int(sys.argv[2]) if len(sys.argv) > 2 else None

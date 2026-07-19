@@ -75,4 +75,9 @@ overlay.json
 overlay.json.tmp
 tracklist.json
 features.json
+feat_s*.json
 .mbid_cache.json
+cast_devices.json
+cast_target.json
+.cutover_filler.wav
+.cutover_filler.wav.txt

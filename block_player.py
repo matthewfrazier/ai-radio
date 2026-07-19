@@ -66,6 +66,16 @@ def clear_state():
         pass
 
 
+def track_state(base, tracks, cur):
+    """Segment state merged with the CURRENTLY-airing track. The now-card shows a
+    single frozen segment label otherwise -- a music segment plays many tracks but
+    write_state only ran once per segment, so /now was stuck on the resolve-time
+    title. Called at track 0 and each boundary so the card follows the audio."""
+    t = tracks[cur] if 0 <= cur < len(tracks) else {}
+    return dict(base, track_index=cur, track_count=len(tracks),
+                track_title=br.track_label(t), track_started_at=br.now_iso())
+
+
 def _on_stop(signum, frame):
     global _stop_requested
     _stop_requested = True
@@ -248,20 +258,21 @@ class Sink:
 BYTES_PER_SEC = 44100 * 2 * 2  # s16le stereo -> byte offset == elapsed seconds
 
 
-def run_segment(seg, bdir, sink, srcpw=None):
+def run_segment(seg, bdir, sink, srcpw=None, state=None):
     if seg.get("status") != "ok":
         log("skip %s seg %s (status=%s)" % (seg.get("type"), seg.get("id"), seg.get("status")))
         return
-    # For music, update the stream title to the real artist/track as each track
-    # boundary passes -- the producer is one concat ffmpeg, so we infer the
-    # current track from bytes written (== elapsed audio). Track 0's title was
-    # already pushed as the segment title, so start at 0 and only push on
-    # advance. Live/tts keep their single segment-level title.
+    # For music, update the stream title AND the /now player-state to the real
+    # artist/track as each track boundary passes -- the producer is one concat
+    # ffmpeg, so we infer the current track from bytes written (== elapsed audio).
+    # Live/tts keep their single segment-level title.
     tracks = (seg.get("resolved") or {}).get("tracks") if seg.get("type") == "music" else None
     bounds, acc = [], 0.0
     for t in (tracks or []):
         acc += (t.get("duration_s") or 0)
         bounds.append(acc * BYTES_PER_SEC)
+    if tracks and state is not None:
+        write_state(track_state(state, tracks, 0))  # track 0 accurate from the start
     written, cur = 0, 0
     proc = subprocess.Popen(segment_cmd(seg, bdir), stdout=subprocess.PIPE)
     try:
@@ -273,11 +284,14 @@ def run_segment(seg, bdir, sink, srcpw=None):
             if _stop_requested or _skip_block:
                 proc.terminate()
                 break
-            if tracks and srcpw:
+            if tracks and (srcpw or state is not None):
                 written += len(chunk)
                 while cur + 1 < len(tracks) and written >= bounds[cur]:
                     cur += 1
-                    push_metadata_async(srcpw, br.track_label(tracks[cur]))
+                    if srcpw:
+                        push_metadata_async(srcpw, br.track_label(tracks[cur]))
+                    if state is not None:
+                        write_state(track_state(state, tracks, cur))
     finally:
         proc.wait()
 
@@ -457,14 +471,15 @@ def main():
                 if i < start_index:
                     continue
                 log("segment %s %s" % (seg.get("type"), seg.get("id")))
-                write_state({"block_id": block_id, "title": block.get("title"),
-                             "segment_count": nsegs, "segment_index": i,
-                             "segment_id": seg.get("id"), "segment_role": seg.get("role"),
-                             "segment_type": seg.get("type"),
-                             "segment_title": (seg.get("resolved") or {}).get("title"),
-                             "started_at": br.now_iso()})
+                state = {"block_id": block_id, "title": block.get("title"),
+                         "segment_count": nsegs, "segment_index": i,
+                         "segment_id": seg.get("id"), "segment_role": seg.get("role"),
+                         "segment_type": seg.get("type"),
+                         "segment_title": (seg.get("resolved") or {}).get("title"),
+                         "started_at": br.now_iso()}
+                write_state(state)
                 push_metadata(srcpw, segment_metadata_title(seg))
-                run_segment(seg, bdir, sink, srcpw)
+                run_segment(seg, bdir, sink, srcpw, state)
             if _skip_block:
                 log("cutover: abandoning %s, re-reading queue" % block_id)
                 _skip_block = False
