@@ -94,9 +94,14 @@ def axes_from_features(highlevel, bpm=None):
 
 
 # ---------------- overlay I/O with provenance ----------------
+def _read_json(path):
+    with open(path) as f:
+        return json.load(f)
+
+
 def load_overlay(path=OVERLAY):
     if os.path.exists(path):
-        return json.load(open(path))
+        return _read_json(path)
     return {"generated_at": None, "vocab_version": VOCAB_VERSION, "tracks": {}}
 
 
@@ -124,7 +129,7 @@ def set_axes(ov, jid, axes, src, conf):
 def load_snapshot(path=SNAPSHOT):
     if not os.path.exists(path):
         raise SystemExit("no %s -- run library_snapshot.py first" % path)
-    return json.load(open(path))
+    return _read_json(path)
 
 
 # ---------------- derived pass (era) over the whole library ----------------
@@ -192,7 +197,7 @@ def _tagged(snap):
 
 
 def enrich_acousticbrainz(snap, ov, limit=None, sleep=1.1):
-    cache = json.load(open(MBID_CACHE)) if os.path.exists(MBID_CACHE) else {}
+    cache = _read_json(MBID_CACHE) if os.path.exists(MBID_CACHE) else {}
     tracks = _tagged(snap)
     tracks = tracks[:limit] if limit else tracks
     hits, done = 0, 0
@@ -225,7 +230,7 @@ def enrich_acousticbrainz(snap, ov, limit=None, sleep=1.1):
 def ingest_essentia(features_path, ov):
     """features_path: JSON {jellyfin_id: essentia_output}. Essentia's
     streaming_extractor_music emits highlevel + rhythm.bpm in one object."""
-    feats = json.load(open(features_path))
+    feats = _read_json(features_path)
     n = 0
     for jid, ess in feats.items():
         hl = ess.get("highlevel") or {}
