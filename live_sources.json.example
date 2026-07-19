@@ -21,6 +21,22 @@
       "homepage": "https://www.dw.com/en/dw-news/program-262267"
     },
     {
+      "id": "nyt_daily",
+      "name": "The Daily (NYT)",
+      "kind": "podcast_latest",
+      "category": "talk",
+      "feed_url": "https://feeds.simplecast.com/54nAGcIl",
+      "homepage": "https://www.nytimes.com/column/the-daily"
+    },
+    {
+      "id": "on_the_media",
+      "name": "On the Media (WNYC)",
+      "kind": "podcast_latest",
+      "category": "talk",
+      "feed_url": "https://feeds.feedburner.com/onthemedia",
+      "homepage": "https://www.wnycstudios.org/podcasts/otm"
+    },
+    {
       "id": "cnn",
       "name": "CNN (live)",
       "url": "https://tunein.cdnstream1.com/2868_96.mp3",
