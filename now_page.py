@@ -161,16 +161,22 @@ function tickerFor(el,timeoutMs){
 
 function statusDot(st){return st==='ok'?'ok':(st==='error'?'bad':'');}
 
-let curBlock=null, voiceOpts=[];   // block being edited (working copy) + voices
+let curBlock=null, voiceOpts=[], sourceOpts=[];  // working copy + voice/source lists
+const TTS_TOPICS=['weather','recap','factoid','freeform'];
+
+// <select> from [{value,label}] items with the given current value selected.
+function optSel(dataf, i, current, items){
+  const o=items.map(it=>`<option value="${esc(it.value)}"${it.value===current?' selected':''}>${esc(it.label)}</option>`).join('');
+  return `<select data-f="${dataf}" data-i="${i}">${o}</select>`;
+}
 
 function segFields(seg, i){
   const p=seg.params||{}, mins=v=>Math.round((v||0)/60);
   if(seg.type==='tts'){
     const topic=p.topic||'freeform';
-    let f=`<label>topic<select data-f="topic" data-i="${i}">`
-      +['weather','recap','factoid','freeform'].map(t=>`<option${t===topic?' selected':''}>${t}</option>`).join('')
-      +`</select></label>`
-      +`<label>voice<input data-f="voice" data-i="${i}" list="voiceList" value="${esc(p.voice||'')}" placeholder="default"></label>`;
+    const voiceItems=[{value:'',label:'(default)'}].concat(voiceOpts.map(v=>({value:v,label:v})));
+    let f=`<label>topic${optSel('topic', i, topic, TTS_TOPICS.map(t=>({value:t,label:t})))}</label>`
+      +`<label>voice${optSel('voice', i, p.voice||'', voiceItems)}</label>`;
     if(topic==='weather') f+=`<label>location<input data-f="location" data-i="${i}" value="${esc(p.location||'')}" placeholder="zip / city"></label>`;
     if(topic==='freeform') f+=`<label>prompt<input data-f="prompt" data-i="${i}" value="${esc(p.prompt||'')}"></label>`;
     return f;
@@ -180,7 +186,8 @@ function segFields(seg, i){
       +`<label>minutes<input data-f="duration_s" data-i="${i}" type="number" min="1" value="${mins(p.duration_s)}"></label>`;
   }
   if(seg.type==='live'){
-    return `<label>source<input data-f="source_id" data-i="${i}" value="${esc(p.source_id||'auto')}"></label>`
+    const srcItems=[{value:'auto',label:'Auto — rotating bulletin'}].concat(sourceOpts.map(s=>({value:s.id,label:s.name})));
+    return `<label>source${optSel('source_id', i, p.source_id||'auto', srcItems)}</label>`
       +`<label>minutes<input data-f="duration_s" data-i="${i}" type="number" min="1" value="${mins(p.duration_s)}"></label>`;
   }
   return '';
@@ -313,8 +320,8 @@ async function loadBuild(){
     const engines=await (await fetch(BASE+'/api/tts_engines')).json();
     const k=(engines||[]).find(e=>e.id==='kokoro');
     voiceOpts=(k&&k.voices)||[];
-    $('voiceList').innerHTML=voiceOpts.map(v=>`<option value="${esc(v)}">`).join('');
   }catch(e){}
+  try{ sourceOpts=await (await fetch(BASE+'/api/live_sources')).json(); }catch(e){}
 }
 $('btnBuild').onclick=async()=>{
   const tick=tickerFor($('buildMsg'),25000); tick.set('creating block');
