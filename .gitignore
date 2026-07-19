@@ -69,3 +69,5 @@ block_player.pid
 .state.lock
 schedule.json
 player_state.json
+library_snapshot.json
+library_snapshot.json.tmp
