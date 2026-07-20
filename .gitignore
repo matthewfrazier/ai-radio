@@ -84,3 +84,4 @@ cast_target.json
 .cutover_filler.wav
 .cutover_filler.wav.txt
 music_playlist_meta.json
+.idle_playlist.shuffled.txt

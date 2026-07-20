@@ -351,7 +351,16 @@ def resolve_music_segment(seg, bdir):
         r = {"ref": "picks:%d" % len(ids), "title": "%d hand-picked tracks" % len(tracks),
              "track_count": len(tracks), "tracks": tracks}
     else:
-        r = jellyfin_client.resolve_music(p.get("query", ""), limit=200)
+        query = p.get("query", "")
+        r = jellyfin_client.resolve_music(query, limit=200)
+        if not r["tracks"] and query.strip():
+            # A query that matches nothing by name (e.g. a genre/mood we don't
+            # tag as a track/playlist title, like "triphop") must NOT air 0s of
+            # silence and collapse the whole block to idle. Fall back to a
+            # library shuffle so a music slot always plays music; the title
+            # records the miss so the operator sees it on /now and in the rundown.
+            r = jellyfin_client.resolve_music("", limit=200)
+            r["title"] = "%s — no match, shuffling" % query.strip()
     playlist_path = f"music_{seg['id']}.txt"
     with open(os.path.join(bdir, playlist_path), "w") as f:
         for t in r["tracks"]:

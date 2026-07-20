@@ -484,6 +484,40 @@ class MusicMetadataTests(unittest.TestCase):
                 "resolved": {"playlist_path": "music_m2.txt"}}
         self.assertIn("-t", block_player.segment_cmd(qseg, tmp.name))
 
+    def test_music_query_no_match_falls_back_to_shuffle(self):
+        # A query that matches nothing (e.g. "triphop") must NOT resolve to a
+        # 0-track segment that airs silence and collapses the block to idle --
+        # it falls back to a library shuffle so the slot always plays music.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        seg = {"id": "m1", "type": "music", "params": {"query": "triphop", "duration_s": 600}}
+        shuffle = {"ref": "library:x", "title": "Music Library (shuffle)", "track_count": 2,
+                   "tracks": [{"id": "a", "name": "TA", "artist": "AA", "duration_s": 200, "url": "http://x/a"},
+                              {"id": "b", "name": "TB", "artist": "AB", "duration_s": 200, "url": "http://x/b"}]}
+        empty = {"ref": "search:triphop", "title": "Search: triphop", "track_count": 0, "tracks": []}
+
+        def fake_resolve(query, limit=200):
+            return empty if query.strip() else shuffle
+
+        with patch.object(block_render.jellyfin_client, "resolve_music", side_effect=fake_resolve):
+            block_render.resolve_music_segment(seg, tmp.name)
+        r = seg["resolved"]
+        self.assertEqual(seg["status"], "ok")
+        self.assertGreater(r["track_count"], 0)               # never an empty music slot
+        self.assertIn("no match", r["title"])                 # the miss is surfaced
+        self.assertIn("triphop", r["title"])
+
+    def test_music_query_with_matches_is_not_overridden(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        seg = {"id": "m1", "type": "music", "params": {"query": "jazz", "duration_s": 600}}
+        hit = {"ref": "search:jazz", "title": "Search: jazz", "track_count": 1,
+               "tracks": [{"id": "a", "name": "TA", "artist": "AA", "duration_s": 200, "url": "http://x/a"}]}
+        with patch.object(block_render.jellyfin_client, "resolve_music", return_value=hit) as m:
+            block_render.resolve_music_segment(seg, tmp.name)
+        self.assertEqual(m.call_count, 1)                      # no fallback re-query
+        self.assertEqual(seg["resolved"]["title"], "Search: jazz")
+
 
 class NowPlayingStateTests(unittest.TestCase):
     """The /now card must follow the CURRENT track inside a music segment, not
@@ -547,6 +581,50 @@ class NowPlayingStateTests(unittest.TestCase):
     def test_idle_index_no_bounds_is_safe(self):
         import block_player
         self.assertEqual(block_player.idle_index(999, [], 0), 0)
+
+    def test_shuffled_idle_reorders_but_keeps_audio_and_meta_in_lockstep(self):
+        # Idle must reshuffle each stint (not always restart at track 0), and the
+        # shuffled audio lines must stay paired with their meta so /now names the
+        # right track. Playlist line N and meta N share the same Jellyfin id.
+        import random
+        import re
+        import block_player
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        pl = os.path.join(tmp.name, "pl.txt")
+        mt = os.path.join(tmp.name, "meta.json")
+        sh = os.path.join(tmp.name, "sh.txt")
+        ids = ["%032x" % i for i in range(20)]
+        with open(pl, "w") as f:
+            for i in ids:
+                f.write("file 'http://h/Audio/%s/stream.mp3'\n" % i)
+        with open(mt, "w") as f:
+            json.dump([{"id": i, "name": "T" + i[-1], "artist": "A", "duration_s": 100} for i in ids], f)
+        with patch.object(block_player, "IDLE_PLAYLIST", pl), \
+             patch.object(block_player, "IDLE_META", mt), \
+             patch.object(block_player, "IDLE_SHUFFLED", sh):
+            random.seed(1)
+            path, meta = block_player.shuffled_idle()
+        self.assertEqual(path, sh)
+        with open(sh) as f:
+            line_ids = [re.search(r"/Audio/([0-9a-f]+)/", ln).group(1) for ln in f if ln.strip()]
+        meta_ids = [m["id"] for m in meta]
+        self.assertEqual(line_ids, meta_ids)          # audio + labels in lockstep
+        self.assertEqual(set(line_ids), set(ids))     # same set, nothing lost
+        self.assertNotEqual(line_ids, ids)            # actually reordered
+
+    def test_shuffled_idle_without_meta_is_generic_and_unshuffled(self):
+        import block_player
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        pl = os.path.join(tmp.name, "pl.txt")
+        with open(pl, "w") as f:
+            f.write("file 'http://h/Audio/abc/stream.mp3'\n")
+        with patch.object(block_player, "IDLE_PLAYLIST", pl), \
+             patch.object(block_player, "IDLE_META", os.path.join(tmp.name, "missing.json")):
+            path, meta = block_player.shuffled_idle()
+        self.assertEqual(path, pl)   # no meta -> play the on-disk list, generic labels
+        self.assertEqual(meta, [])
 
     def test_now_state_serves_in_memory_state(self):
         # The panel OWNS the live state in memory (fed by the player push); a

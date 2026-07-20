@@ -22,6 +22,7 @@ import errno
 import fcntl
 import json
 import os
+import random
 import signal
 import subprocess
 import threading
@@ -38,6 +39,7 @@ STATE_URL = "http://127.0.0.1:8080/api/player/state"  # panel owns the live stat
 FILLER_WAV = os.path.join(BASE, ".cutover_filler.wav")
 IDLE_PLAYLIST = os.path.join(BASE, "music_playlist.txt")
 IDLE_META = os.path.join(BASE, "music_playlist_meta.json")  # per-track name/dur, playlist order
+IDLE_SHUFFLED = os.path.join(BASE, ".idle_playlist.shuffled.txt")  # per-stint reshuffle
 
 _stop_requested = False
 _skip_block = False
@@ -107,6 +109,27 @@ def load_idle_meta():
         return m if isinstance(m, list) else []
     except Exception:
         return []
+
+
+def shuffled_idle():
+    """A freshly-shuffled idle playlist + its matching per-track meta, so each
+    idle stint plays in a NEW order instead of always restarting at track 0.
+    Playlist lines and meta are paired (same source order) then shuffled together
+    so the audio and the /now labels stay in lockstep. Falls back to the on-disk
+    playlist with generic labels if meta is missing or out of sync."""
+    meta = load_idle_meta()
+    try:
+        with open(IDLE_PLAYLIST) as f:
+            lines = [ln for ln in f if ln.strip()]
+    except OSError:
+        return IDLE_PLAYLIST, []
+    if not meta or len(meta) != len(lines):
+        return IDLE_PLAYLIST, []  # can't safely label/shuffle -> generic, unshuffled
+    pairs = list(zip(lines, meta))
+    random.shuffle(pairs)
+    with open(IDLE_SHUFFLED, "w") as f:
+        f.write("".join(ln for ln, _ in pairs))
+    return IDLE_SHUFFLED, [m for _, m in pairs]
 
 
 def idle_plan(meta):
@@ -437,14 +460,14 @@ def render_with_filler(block_id, sink, cfg):
     return result["block"]
 
 
-def idle_cmd():
+def idle_cmd(playlist=IDLE_PLAYLIST):
     # The same looped local-music playlist the static writ-stream fallback
     # plays, but decoded to raw PCM for our persistent sink instead of its own
     # Icecast source -- so idle playout holds the SAME mount and never flaps.
     return ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin", "-re",
             "-stream_loop", "-1",
             "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
-            "-f", "concat", "-safe", "0", "-i", IDLE_PLAYLIST] + NORM_AF + PCM_OUT
+            "-f", "concat", "-safe", "0", "-i", playlist] + NORM_AF + PCM_OUT
 
 
 def run_idle(sink, srcpw):
@@ -462,7 +485,8 @@ def run_idle(sink, srcpw):
     # producer is one looping concat ffmpeg, so infer the track from bytes
     # written (== elapsed audio); metadata is written by jf_source in playlist
     # order. No metadata -> generic label, unchanged behaviour.
-    labels, bounds, total = idle_plan(load_idle_meta())
+    playlist, meta = shuffled_idle()  # reshuffle each stint so idle isn't a loop
+    labels, bounds, total = idle_plan(meta)
 
     def idle_state(cur):
         base = {"phase": "idle", "idle": True, "air_fill": "idle music",
@@ -475,7 +499,7 @@ def run_idle(sink, srcpw):
     # Explicit idle marker (not clear_state) so /now can distinguish "player is
     # holding the stream with idle music" from "player off, fallback loop on".
     write_state(idle_state(0))
-    proc = subprocess.Popen(idle_cmd(), stdout=subprocess.PIPE)
+    proc = subprocess.Popen(idle_cmd(playlist), stdout=subprocess.PIPE)
     pushed, written, cur = False, 0, 0
     try:
         while not _stop_requested and not _skip_block:
