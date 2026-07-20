@@ -34,7 +34,7 @@ import block_render as br
 BASE = "/opt/writ-fm"
 FIFO_PATH = os.path.join(BASE, ".block_sink.fifo")
 STUBENV = os.path.join(BASE, ".stubenv")
-STATE_FILE = os.path.join(BASE, "player_state.json")
+STATE_URL = "http://127.0.0.1:8080/api/player/state"  # panel owns the live state
 FILLER_WAV = os.path.join(BASE, ".cutover_filler.wav")
 IDLE_PLAYLIST = os.path.join(BASE, "music_playlist.txt")
 
@@ -47,33 +47,54 @@ def log(msg):
     print("block_player: %s" % msg, flush=True)
 
 
-def write_state(d):
-    # Best-effort "what's airing right now" for the /now monitor view. Atomic;
-    # never fatal to playback.
+_CURRENT = {}
+
+
+def _push_state(d):
     try:
-        tmp = STATE_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(d, f)
-        os.replace(tmp, STATE_FILE)
-    except OSError:
+        req = urllib.request.Request(STATE_URL, data=json.dumps(d).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        urllib.request.urlopen(req, timeout=2).read()
+    except Exception:
         pass
+
+
+def write_state(d):
+    # Publish the live on-air state to the panel (which owns it in memory and
+    # streams it to /now over SSE). Fire-and-forget from a daemon thread so a
+    # slow/down panel never stalls the audio loop. Named write_state for its
+    # many call sites; the transport is a push, not a file.
+    global _CURRENT
+    _CURRENT = d
+    threading.Thread(target=_push_state, args=(d,), daemon=True).start()
 
 
 def clear_state():
-    try:
-        os.remove(STATE_FILE)
-    except OSError:
-        pass
+    global _CURRENT
+    _CURRENT = {}
+    _push_state({})  # synchronous: the process is exiting, let the panel know
+
+
+def _heartbeat():
+    # Re-publish current state every 5s so the panel can tell the player is alive
+    # and recovers the live view immediately after a panel restart.
+    while True:
+        time.sleep(5)
+        if _CURRENT:
+            _push_state(_CURRENT)
 
 
 def track_state(base, tracks, cur):
-    """Segment state merged with the CURRENTLY-airing track. The now-card shows a
-    single frozen segment label otherwise -- a music segment plays many tracks but
-    write_state only ran once per segment, so /now was stuck on the resolve-time
-    title. Called at track 0 and each boundary so the card follows the audio."""
+    """Segment state merged with the CURRENTLY-airing track, so /now shows the
+    real track AND per-track elapsed inside a music segment (otherwise the card
+    was frozen on the resolve-time segment label). `on_air` is the single label
+    of what is audible right now; `started_at` re-anchors to THIS track so the
+    elapsed counter tracks the song, not the whole set. Called at track 0 and
+    each boundary. `segment_started_at` (in base) keeps the segment anchor."""
     t = tracks[cur] if 0 <= cur < len(tracks) else {}
-    return dict(base, track_index=cur, track_count=len(tracks),
-                track_title=br.track_label(t), track_started_at=br.now_iso())
+    lab = br.track_label(t)
+    return dict(base, phase="airing", track_index=cur, track_count=len(tracks),
+                track_title=lab, on_air=lab, started_at=br.now_iso())
 
 
 def _on_stop(signum, frame):
@@ -171,10 +192,16 @@ def segment_cmd(seg, bdir):
                 "-i", path] + NORM_AF + PCM_OUT
     if t == "music":
         path = os.path.join(bdir, seg["resolved"]["playlist_path"])
-        return ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin", "-re",
-                "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
-                "-f", "concat", "-safe", "0", "-i", path,
-                "-t", str(seg["params"].get("duration_s", 900))] + NORM_AF + PCM_OUT
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin", "-re",
+               "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
+               "-f", "concat", "-safe", "0", "-i", path]
+        # A hand-picked crate (track_ids) plays its finite playlist to the end;
+        # a query set caps at the segment duration (the shuffle is endless).
+        dur = seg["params"].get("duration_s") if seg["params"].get("track_ids") \
+            else seg["params"].get("duration_s", 900)
+        if dur:
+            cmd += ["-t", str(dur)]
+        return cmd + NORM_AF + PCM_OUT
     raise ValueError("unknown segment type %s" % t)
 
 
@@ -392,7 +419,8 @@ def run_idle(sink, srcpw):
     log("queue empty -- holding mount with idle music loop")
     # Explicit idle marker (not clear_state) so /now can distinguish "player is
     # holding the stream with idle music" from "player off, fallback loop on".
-    write_state({"idle": True, "started_at": br.now_iso()})
+    write_state({"phase": "idle", "idle": True, "on_air": "Idle music mix",
+                 "air_fill": "idle music", "started_at": br.now_iso()})
     proc = subprocess.Popen(idle_cmd(), stdout=subprocess.PIPE)
     pushed = False
     try:
@@ -434,6 +462,7 @@ def main():
     signal.signal(signal.SIGTERM, _on_stop)
     signal.signal(signal.SIGINT, _on_stop)
     signal.signal(signal.SIGHUP, _on_skip)
+    threading.Thread(target=_heartbeat, daemon=True).start()
 
     srcpw = load_srcpw()
     sink = open_sink(srcpw)
@@ -452,6 +481,17 @@ def main():
                 continue
             block_id = queue[0]
             cfg = br.load_station_cfg()
+            # Announce the render IMMEDIATELY so /now shows "preparing <block>"
+            # with a live elapsed and names the air fill -- instead of holding
+            # the previous block's stale state for the whole 10-30s render gap.
+            fill = "spoken bumper" if cfg.get("cutover_filler", True) else "silence"
+            try:
+                rtitle = br.load_block(block_id).get("title")
+            except Exception:
+                rtitle = None
+            write_state({"phase": "rendering", "block_id": block_id, "title": rtitle,
+                         "on_air": "Air fill: " + fill, "air_fill": fill,
+                         "started_at": br.now_iso()})
             try:
                 # re-resolve/re-render at AIR time, feeding filler to the sink
                 # so the stream doesn't underrun during the render.
@@ -471,12 +511,14 @@ def main():
                 if i < start_index:
                     continue
                 log("segment %s %s" % (seg.get("type"), seg.get("id")))
-                state = {"block_id": block_id, "title": block.get("title"),
+                seg_start = br.now_iso()
+                state = {"phase": "airing", "block_id": block_id, "title": block.get("title"),
                          "segment_count": nsegs, "segment_index": i,
                          "segment_id": seg.get("id"), "segment_role": seg.get("role"),
                          "segment_type": seg.get("type"),
                          "segment_title": (seg.get("resolved") or {}).get("title"),
-                         "started_at": br.now_iso()}
+                         "on_air": segment_metadata_title(seg),
+                         "started_at": seg_start, "segment_started_at": seg_start}
                 write_state(state)
                 push_metadata(srcpw, segment_metadata_title(seg))
                 run_segment(seg, bdir, sink, srcpw, state)

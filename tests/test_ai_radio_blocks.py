@@ -28,6 +28,7 @@ import hour_templates  # noqa: E402
 import jellyfin_client  # noqa: E402
 import live_source  # noqa: E402
 import llm_backends  # noqa: E402
+import music_browser  # noqa: E402
 import panel  # noqa: E402
 import tts_content  # noqa: E402
 import tts_engines  # noqa: E402
@@ -458,6 +459,31 @@ class MusicMetadataTests(unittest.TestCase):
         self.assertEqual(r["tracks_head"][0], "A0 — T0")
         self.assertEqual(seg["status"], "ok")
 
+    def test_resolve_music_segment_explicit_track_ids(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        seg = {"id": "m1", "type": "music", "params": {"track_ids": ["a", "b"]}}
+        fake = [{"id": "a", "name": "TA", "artist": "AA", "duration_s": 100, "url": "http://x/a"},
+                {"id": "b", "name": "TB", "artist": "AB", "duration_s": 140, "url": "http://x/b"}]
+        with patch.object(block_render.jellyfin_client, "tracks_by_ids", return_value=fake):
+            block_render.resolve_music_segment(seg, tmp.name)
+        r = seg["resolved"]
+        self.assertEqual(r["track_count"], 2)
+        self.assertEqual(len(r["tracks"]), 2)          # every pick kept
+        self.assertEqual(r["duration_s"], 240)         # total, for est/display
+        self.assertEqual(r["tracks_head"][0], "AA — TA")
+        self.assertEqual(seg["status"], "ok")
+        with open(os.path.join(tmp.name, r["playlist_path"])) as f:
+            body = f.read()
+        self.assertIn("http://x/a", body)
+        self.assertIn("http://x/b", body)
+        # a crate plays its finite playlist to the end -- no -t cap; a query set caps.
+        import block_player
+        self.assertNotIn("-t", block_player.segment_cmd(seg, tmp.name))
+        qseg = {"id": "m2", "type": "music", "params": {"query": "jazz", "duration_s": 300},
+                "resolved": {"playlist_path": "music_m2.txt"}}
+        self.assertIn("-t", block_player.segment_cmd(qseg, tmp.name))
+
 
 class NowPlayingStateTests(unittest.TestCase):
     """The /now card must follow the CURRENT track inside a music segment, not
@@ -467,18 +493,20 @@ class NowPlayingStateTests(unittest.TestCase):
 
     def test_track_state_merges_current_track(self):
         import block_player
-        base = {"block_id": "b1", "segment_index": 2, "segment_type": "music",
+        base = {"phase": "airing", "block_id": "b1", "segment_index": 2, "segment_type": "music",
                 "segment_title": "Playlist: 00. Toad The Wet Sprocket - Coil",
-                "started_at": "SEG-START"}
+                "segment_started_at": "SEG-START"}
         tracks = [{"artist": "Air", "name": "Alone"}, {"artist": "Boards", "name": "Roygbiv"}]
         s0 = block_player.track_state(base, tracks, 0)
         self.assertEqual(s0["track_index"], 0)
         self.assertEqual(s0["track_count"], 2)
         self.assertEqual(s0["track_title"], "Air — Alone")
-        self.assertEqual(s0["started_at"], "SEG-START")   # segment fields preserved
+        self.assertEqual(s0["on_air"], "Air — Alone")            # the single audible label
+        self.assertEqual(s0["phase"], "airing")
+        self.assertEqual(s0["segment_started_at"], "SEG-START")  # segment anchor preserved
+        self.assertNotEqual(s0.get("started_at"), "SEG-START")   # re-anchored to THIS track
         self.assertEqual(s0["block_id"], "b1")
-        self.assertIn("track_started_at", s0)
-        s1 = block_player.track_state(base, tracks, 1)     # advance
+        s1 = block_player.track_state(base, tracks, 1)           # advance
         self.assertEqual(s1["track_index"], 1)
         self.assertEqual(s1["track_title"], "Boards — Roygbiv")
 
@@ -488,25 +516,30 @@ class NowPlayingStateTests(unittest.TestCase):
         self.assertEqual(s["track_count"], 0)
         self.assertEqual(s["track_title"], "Music")
 
-    def test_now_state_passes_track_fields(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        sf = os.path.join(tmp.name, "player_state.json")
-        with open(sf, "w") as f:
-            json.dump({"block_id": "b1", "segment_index": 1, "segment_count": 3,
-                       "segment_type": "music", "segment_title": "Playlist: X",
-                       "track_index": 4, "track_count": 9, "track_title": "Air — Alone"}, f)
-        with patch.object(panel, "PLAYER_STATE_FILE", sf), \
-             patch.object(panel, "_player_active", return_value=True), \
+    def test_now_state_serves_in_memory_state(self):
+        # The panel OWNS the live state in memory (fed by the player push); a
+        # fresh push means player_active. now_state passes it through verbatim.
+        st = {"phase": "airing", "block_id": "b1", "segment_index": 1, "segment_count": 3,
+              "segment_type": "music", "track_index": 4, "track_count": 9,
+              "track_title": "Air — Alone", "on_air": "Air — Alone"}
+        with patch.object(panel, "_PLAYER_STATE", st), \
+             patch.object(panel, "_LAST_PUSH", time.time()), \
              patch.object(panel, "icecast_status", return_value={"live": True, "listeners": 2}), \
              patch.object(panel, "_cast_target_read", return_value=None), \
              patch.object(panel.block_render, "load_queue", return_value=[]):
             n = panel.now_state()
-        st = n["state"]
-        self.assertEqual(st["track_title"], "Air — Alone")   # the real airing track
-        self.assertEqual(st["track_index"], 4)
-        self.assertEqual(st["track_count"], 9)
         self.assertTrue(n["player_active"])
+        self.assertEqual(n["state"]["on_air"], "Air — Alone")
+        self.assertEqual(n["state"]["track_index"], 4)
+
+    def test_now_state_inactive_when_stale(self):
+        # No recent push (>12s or never) -> the player isn't on air.
+        with patch.object(panel, "_PLAYER_STATE", {}), \
+             patch.object(panel, "_LAST_PUSH", 0.0), \
+             patch.object(panel, "icecast_status", return_value={"live": False, "listeners": 0}), \
+             patch.object(panel, "_cast_target_read", return_value=None), \
+             patch.object(panel.block_render, "load_queue", return_value=[]):
+            self.assertFalse(panel.now_state()["player_active"])
 
 
 class CleanupTests(unittest.TestCase):
@@ -990,6 +1023,120 @@ class JellyfinClientTests(unittest.TestCase):
         self.assertIn("item456", url)
         self.assertIn("tok123", url)
         self.assertIn("audioBitRate=128000", url)
+
+
+class MusicBrowserTests(unittest.TestCase):
+    """Compact browse index build + pure-Python weighted kNN / facets / search."""
+
+    def _load(self, recs):
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        json.dump({"axes": list(music_browser.AXES), "tracks": recs}, tmp)
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        self.addCleanup(lambda: setattr(music_browser, "_INDEX", None))
+        music_browser.load_index(path=tmp.name, force=True)
+
+    def _rec(self, tid, vec, **kw):
+        return {"id": tid, "name": kw.get("name", tid), "artist": kw.get("artist", ""),
+                "album": kw.get("album", ""), "genres": kw.get("genres", []), "year": None,
+                "era": kw.get("era"), "live": kw.get("live", False),
+                "moods": kw.get("moods", []), "themes": kw.get("themes", []),
+                "bpm": kw.get("bpm", 120), "vec": vec}
+
+    def test_build_browse_index_joins_and_skips(self):
+        snap = {"tracks": [
+            {"id": "a", "name": "A", "artists": ["Air"], "album": "Alb", "genres": ["x"], "year": 2001},
+            {"id": "b", "name": "B", "artists": []},  # no overlay entry -> skipped
+        ]}
+        ov = {"tracks": {"a": {"energy": 0.5, "valence": 0.4, "acousticness": 0.3,
+                               "danceability": 0.6, "instrumental": 0.1, "tempo_bpm": 120.0,
+                               "era": "2000s", "live": True, "moods": ["Mellow"]}}}
+        idx = overlay.build_browse_index(snap, ov)
+        self.assertEqual([r["id"] for r in idx["tracks"]], ["a"])
+        r = idx["tracks"][0]
+        self.assertEqual(r["artist"], "Air")
+        self.assertTrue(r["live"])
+        self.assertEqual(len(r["vec"]), 6)
+        self.assertAlmostEqual(r["vec"][5], overlay.tempo_norm(120.0))
+
+    def test_nearest_ranks_by_weighted_distance(self):
+        self._load([
+            self._rec("seed", [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]),
+            self._rec("close", [0.52, 0.5, 0.5, 0.5, 0.5, 0.5]),
+            self._rec("far", [0.1, 0.9, 0.1, 0.9, 0.1, 0.9]),
+        ])
+        res = music_browser.nearest([0.5] * 6, k=3)
+        self.assertEqual([r["id"] for r in res], ["seed", "close", "far"])
+        self.assertEqual(res[0]["score"], 1.0)
+        self.assertGreater(res[1]["score"], res[2]["score"])
+
+    def test_facets_studio_era_mood(self):
+        self._load([
+            self._rec("s", [0.5] * 6, live=False, era="2000s", moods=["Mellow"]),
+            self._rec("liveone", [0.5] * 6, live=True, era="2000s"),
+            self._rec("old", [0.5] * 6, era="1980s"),
+        ])
+        self.assertNotIn("liveone", {r["id"] for r in music_browser.nearest([0.5] * 6)})  # studio default
+        self.assertIn("liveone", {r["id"] for r in music_browser.nearest([0.5] * 6, studio_only=False)})
+        self.assertNotIn("old", {r["id"] for r in music_browser.nearest([0.5] * 6, era="2000s", studio_only=False)})
+        self.assertEqual({r["id"] for r in music_browser.nearest([0.5] * 6, moods=["mellow"])}, {"s"})
+
+    def test_similar_excludes_seed_and_search(self):
+        self._load([
+            self._rec("seed", [0.5] * 6, name="Blue Monday", artist="New Order"),
+            self._rec("x", [0.5] * 6),
+        ])
+        self.assertNotIn("seed", {r["id"] for r in music_browser.similar("seed")})
+        self.assertEqual([r["id"] for r in music_browser.search("new order")], ["seed"])
+        self.assertEqual(music_browser.similar("missing"), [])
+
+    def test_dedup_key_normalizes_masters_not_takes(self):
+        k = music_browser.dedup_key
+        base = k("Whatever", "Air")
+        self.assertEqual(base, k("03 -Whatever", "Air"))              # leading track no.
+        self.assertEqual(base, k("Whatever (2005 Remaster)", "Air"))  # remaster paren
+        self.assertEqual(base, k("Whatever - 2011 Remastered", "Air"))  # dash remaster
+        self.assertNotEqual(base, k("Whatever (Live)", "Air"))        # live = distinct take
+        self.assertNotEqual(base, k("Whatever", "Beach House"))       # different artist
+        self.assertIsNone(k("[untitled]", "Air"))                    # generic -> no key
+        self.assertIsNone(k("Intro", "Air"))
+        self.assertIsNone(k("07", "Air"))
+
+    def test_nearest_collapses_duplicates(self):
+        self._load([
+            self._rec("a", [0.5] * 6, name="Song", artist="X"),
+            self._rec("a2", [0.5] * 6, name="Song (2005 Remaster)", artist="X"),
+            self._rec("b", [0.4] * 6, name="Other", artist="Y"),
+        ])
+        res = music_browser.nearest([0.5] * 6, k=10)
+        self.assertEqual(len(res), 2)                 # a + a2 fold into one
+        self.assertEqual(res[0]["dupes"], 2)
+        self.assertEqual(len(music_browser.nearest([0.5] * 6, collapse=False)), 3)
+
+    def test_dedup_clusters_keep_studio_and_flag_divergent(self):
+        self._load([
+            self._rec("d1", [0.5] * 6, name="Twin", artist="Z", duration_s=200, album="A"),
+            self._rec("d2", [0.5] * 6, name="Twin", artist="Z", duration_s=201),
+            self._rec("d3", [0.9, 0.1, 0.5, 0.5, 0.5, 0.5], name="Twin", artist="Z", duration_s=260),
+        ])
+        twin = next(c for c in music_browser.dedup_clusters() if c["keep"]["name"] == "Twin")
+        self.assertEqual(twin["size"], 3)
+        self.assertTrue(twin["divergent"])            # d3 duration + features diverge
+        self.assertEqual(twin["keep"]["id"], "d1")    # tagged album wins the keep slot
+        self.assertEqual({r["id"] for r in twin["prune"]}, {"d2", "d3"})
+
+    def test_safe_prune_plan_excludes_divergent(self):
+        self._load([
+            self._rec("k", [0.5] * 6, name="Dup", artist="Q", album="LP", duration_s=200),
+            self._rec("p", [0.5] * 6, name="Dup", artist="Q", duration_s=201),   # safe copy -> prune
+            self._rec("a", [0.5] * 6, name="Alt", artist="Q", duration_s=200),
+            self._rec("b", [0.1, 0.9, 0.5, 0.5, 0.5, 0.5], name="Alt", artist="Q", duration_s=280),
+        ])
+        plan = music_browser.safe_prune_plan()
+        self.assertEqual(plan["prune_ids"], ["p"])     # only the safe extra copy
+        keys = [m["keep"]["id"] for m in plan["manifest"]]
+        self.assertIn("k", keys)                       # Dup kept the album copy
+        self.assertNotIn("a", keys)                    # divergent Alt group excluded
 
 
 if __name__ == "__main__":

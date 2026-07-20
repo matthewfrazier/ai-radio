@@ -191,6 +191,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface-2);padd
   <div class="castdetails" id="castDetails" hidden></div>
   <div class="sub" id="outMsg">scanning for speakers…</div>
   <button class="playbig" id="btnAirActive" type="button" disabled>▶ Play active block from the top</button>
+  <div class="sub" id="airReady"></div>
   <div class="sub notif" id="switchMsg"></div>
 </div>
 
@@ -249,6 +250,7 @@ let outputTarget="", castUuid="", castName="";
 // A cutover (▶ / skip / air) renders for a few seconds before the new segment
 // airs; track it so the now-card shows an explicit "switching" state.
 let switching=null; // {id, idx, since}
+let lastNow=null;
 
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
@@ -372,6 +374,29 @@ async function inspect(id){
   try{ curBlock=await (await fetch(BASE+'/api/blocks/'+id)).json(); }
   catch(e){ $('blockView').textContent='load failed'; return; }
   loadList(); renderEditor(); renderDetails();
+  preRender(id);  // warm missing/stale segments now so cutover is near-instant
+}
+
+// Pre-render the active block's missing/stale segments in the background when
+// it's loaded, so "Play active block" doesn't pay the (music-resolution-heavy)
+// air-time render. force:false = selective, so a warm block is a cheap no-op.
+let preRenderId=null;
+function setAirReady(state){
+  $('airReady').textContent = state==='preparing' ? '⏳ preparing segments…'
+    : state==='ready' ? '✓ ready to air'
+    : state==='error' ? '⚠ some segments failed to build — check Details'
+    : '';
+}
+async function preRender(id){
+  if(!id){ setAirReady(''); return; }
+  if(id===airingId){ preRenderId=id; setAirReady('ready'); return; }  // on-air block is already built
+  preRenderId=id; setAirReady('preparing');
+  try{
+    const b=await (await fetch(BASE+'/api/blocks/'+id+'/render',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({force:false})})).json();
+    if(preRenderId!==id) return;  // superseded by a newer active block
+    setAirReady((b.segments||[]).some(s=>s.status==='error') ? 'error' : 'ready');
+  }catch(e){ if(preRenderId===id) setAirReady(''); }
 }
 
 // --- Editor tab ---
@@ -586,48 +611,56 @@ function paintSwitching(){
   $('btnPrev').disabled=true; $('btnNext').disabled=true; $('navMsg').textContent='switching…';
 }
 
+function setNav(idx,n){
+  $('btnPrev').disabled = !(idx>0);
+  $('btnNext').disabled = !(n && idx<n-1);
+  $('navMsg').textContent = n ? ('segment '+(idx+1)+' / '+n) : '';
+}
+// Phase-driven: player_state.phase is the ground truth of what's on air right
+// now -- airing (a track/segment), rendering (cutover render, air fill audible),
+// or idle (between-blocks music). st.on_air is always the single audible label.
 function renderNow(nowd){
-  const card=$('now'), st=nowd.state||{}, live=(nowd.stream||{}).live;
+  const card=$('now'), st=nowd.state||{}, live=(nowd.stream||{}).live, phase=st.phase;
+  // Optimistic client 'switching' only bridges click -> server's first render
+  // state; the server owns the truth as soon as it reports rendering/airing.
   if(switching){
-    const arrived = nowd.player_active && st.block_id===switching.id && (st.segment_index??-1)===switching.idx;
-    if(arrived || (Date.now()-switching.since)>35000) switching=null;
-    else { paintSwitching(); return; }
+    const owned = nowd.player_active && (phase==='rendering' || st.block_id===switching.id);
+    if(owned || (Date.now()-switching.since)>40000) switching=null;
+    else { paintSwitching(); setNav(-1,0); return; }
   }
-  if(!(nowd.player_active && st.block_id)){
-    let msg;
-    if(nowd.player_active && st.idle)
-      msg='Idle music — the player is holding the stream between blocks. Queue a block or press ▶ on a segment.';
-    else if(nowd.player_active)
-      msg='Player running, starting up…';
-    else if(live)
-      msg='Static fallback loop — no programmed block is airing.';
-    else
-      msg='Stream offline — no source is connected.';
+  if(!nowd.player_active){
     card.className='nowcard';
-    card.innerHTML='<span class="sub">'+esc(msg)+'</span>';
-    $('btnPrev').disabled=true; $('btnNext').disabled=true; $('navMsg').textContent='';
-    return;
+    card.innerHTML='<span class="sub">'+esc(live?'Static fallback loop — no programmed block is airing.':'Stream offline — no source is connected.')+'</span>';
+    setNav(-1,0); return;
   }
-  const idx=st.segment_index??0, n=st.segment_count||0;
-  // Track-accurate title: a music segment plays many tracks; the player mirrors
-  // the CURRENT track into player_state (track_title), so prefer it over the
-  // frozen resolve-time segment label.
-  const isMusic=st.segment_type==='music';
-  const title=(isMusic && st.track_title) ? st.track_title : (st.segment_title||st.segment_id||'');
-  const trackline=(isMusic && st.track_count) ? (' &middot; track '+((st.track_index??0)+1)+' of '+st.track_count) : '';
+  if(phase==='rendering'){
+    card.className='nowcard on switching';
+    card.innerHTML=`<div class="line1"><span class="badge">preparing</span>
+        <span class="segt">${esc(st.on_air||'Air fill')}</span></div>
+      <div class="meta">rendering <b>${esc(st.title||st.block_id||'next block')}</b> &middot; <span id="elapsed">${fmtElapsed(airingStartedMs)}</span></div>`;
+    setNav(-1,0); return;
+  }
+  if(phase==='idle' || st.idle || !st.block_id){
+    card.className='nowcard';
+    card.innerHTML=`<div class="line1"><span class="badge">idle</span> <span class="segt">${esc(st.on_air||'Idle music mix')}</span></div>
+      <div class="meta">between blocks — queue a block or press ▶ on a segment &middot; <span id="elapsed">${fmtElapsed(airingStartedMs)}</span></div>`;
+    setNav(-1,0); return;
+  }
+  // airing a segment
+  const idx=st.segment_index??0, n=st.segment_count||0, isMusic=st.segment_type==='music';
+  const onair = st.on_air || st.track_title || st.segment_title || st.segment_id || '';
+  const trackline=(isMusic && st.track_count)?(' &middot; track '+((st.track_index??0)+1)+' of '+st.track_count):'';
   card.className='nowcard on';
   card.innerHTML=`<div class="line1">
       ${st.segment_role?('<span class="badge role">'+esc(st.segment_role)+'</span>'):''}
       ${st.segment_type?typeBadge(st.segment_type):''}
-      <span class="segt">${esc(title)}</span>
+      <span class="segt">${esc(onair)}</span>
     </div>
-    <div class="meta"><b class="blk" data-airblock="${esc(st.block_id)}">${esc(st.title||st.block_id)}</b> &middot; segment ${idx+1} of ${n}${trackline} &middot; <span id="elapsed">${fmtElapsed(airingStartedMs)}</span> elapsed</div>
+    <div class="meta"><b class="blk" data-airblock="${esc(st.block_id)}">${esc(st.title||st.block_id)}</b> &middot; segment ${idx+1} of ${n}${trackline} &middot; <span id="elapsed">${fmtElapsed(airingStartedMs)}</span></div>
     <div class="prog"><i style="width:${n?Math.round((idx+1)/n*100):0}%"></i></div>`;
   const blk=card.querySelector('[data-airblock]');
   if(blk) blk.onclick=()=>{ inspect(st.block_id); showTab('editor'); };
-  $('btnPrev').disabled = !(idx>0);
-  $('btnNext').disabled = !(n && idx<n-1);
-  $('navMsg').textContent = 'segment '+(idx+1)+' / '+n;
+  setNav(idx,n);
 }
 
 // Reconcile UI output state with the server's authoritative cast target.
@@ -685,31 +718,40 @@ function renderDiag(n){
   $('diag').innerHTML=rows.map(r=>`<div>${r[0]}</div><div><b>${r[1]}</b></div>`).join('');
 }
 
+function applyNow(n){
+  reconcileOutput(n.cast);
+  updateOutputMode(n);
+  const s=n.stream||{};
+  $('sstate').textContent=s.live?'live':'offline';
+  $('sdot').className='dot '+(s.live?'live':'bad');
+  $('listeners').textContent=s.live?('· '+(s.listeners||0)+' listening'):'';
+  $('stitle').textContent=s.title?('“'+s.title+'”'):'';
+  const st=n.state||{};
+  const prevA=airingId;
+  airingId=n.player_active?(st.block_id||''):'';
+  airingIdx=n.player_active&&st.segment_index!=null?st.segment_index:-1;
+  airingCount=st.segment_count||0;
+  // started_at marks the CURRENT on-air thing (track / segment / render / idle)
+  // -> elapsed = how long that exact thing has been audible.
+  airingStartedMs = (n.player_active && st.started_at) ? Date.parse(st.started_at) : 0;
+  renderNow(n);
+  renderDiag(n);
+  lastNow=n;
+  // refresh the block-list highlight when the airing block changes (never
+  // reload the editor -- that would clobber in-progress edits).
+  if(airingId!==prevA) loadList();
+}
 async function poll(){
-  try{
-    const n=await (await fetch(BASE+'/api/now')).json();
-    reconcileOutput(n.cast);
-    updateOutputMode(n);
-    const s=n.stream||{};
-    $('sstate').textContent=s.live?'live':'offline';
-    $('sdot').className='dot '+(s.live?'live':'bad');
-    $('listeners').textContent=s.live?('· '+(s.listeners||0)+' listening'):'';
-    $('stitle').textContent=s.title?('“'+s.title+'”'):'';
-    const st=n.state||{};
-    const prevIdx=airingIdx, prevA=airingId;
-    airingId=n.player_active?(st.block_id||''):'';
-    airingIdx=n.player_active&&st.segment_index!=null?st.segment_index:-1;
-    airingCount=st.segment_count||0;
-    if(airingIdx!==prevIdx || !airingStartedMs){
-      airingStartedMs = st.started_at?Date.parse(st.started_at):(n.player_active?Date.now():0);
-    }
-    if(!n.player_active || !st.block_id) airingStartedMs=0;
-    renderNow(n);
-    renderDiag(n);
-    // refresh the block-list highlight when the airing block changes (never
-    // reload the editor -- that would clobber in-progress edits).
-    if(airingId!==prevA) loadList();
-  }catch(e){}
+  try{ applyNow(await (await fetch(BASE+'/api/now')).json()); }catch(e){}
+}
+// Live push via Server-Sent Events: the panel streams the now-payload on every
+// player transition (render-start / segment / each track / idle) plus a 4s
+// ambient refresh -- so /now updates within ~1s, no polling. EventSource
+// auto-reconnects on drop; fall back to polling only if SSE is unavailable.
+function startNowStream(){
+  if(!window.EventSource){ setInterval(poll, 3000); return; }
+  const es=new EventSource(BASE+'/api/now/stream');
+  es.onmessage=e=>{ try{ applyNow(JSON.parse(e.data)); }catch(_){} };
 }
 
 $('btnPrev').onclick=()=>{ if(airingId && airingIdx>0) playFrom(airingId, airingIdx-1); };
@@ -825,7 +867,7 @@ document.querySelectorAll('.tab').forEach(t=>{ t.onclick=()=>showTab(t.dataset.t
   showTab('editor');
   loadTargets();  // cached device list -> instant; Rescan forces a fresh scan
   loadLog();
-  setInterval(poll, 4000);
+  startNowStream();  // live SSE push (falls back to polling if unsupported)
   setInterval(tickElapsed, 1000);
   setInterval(loadLog, 5000);
   setInterval(loadList, 20000);

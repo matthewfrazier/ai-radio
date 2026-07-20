@@ -41,7 +41,9 @@ def main():
         page = browser.new_page(viewport=VP)
         cerr = []
         page.on("console", lambda m: cerr.append(m.text) if m.type == "error" else None)
-        page.goto(URL, wait_until="networkidle")
+        # domcontentloaded, not networkidle: the live SSE stream is a long-lived
+        # request, so the network never goes idle (by design).
+        page.goto(URL, wait_until="domcontentloaded")
 
         # 1. monitor + controls visible without scrolling
         check("now-card present", page.locator("#now").count() == 1)

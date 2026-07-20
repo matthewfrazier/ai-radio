@@ -11,6 +11,7 @@ import os
 import re
 import socket
 import subprocess
+import queue
 import threading
 import time
 import urllib.request
@@ -22,12 +23,14 @@ from tts_engines import kokoro_voices, kokoro_speech
 import block_presets
 import block_render
 import blocks_page
+import browse_page
 import day_page
 import day_program
 import hour_templates
 import jellyfin_client
 import live_source
 import llm_backends
+import music_browser
 import now_page
 import tts_engines
 
@@ -427,18 +430,98 @@ def _cast_budget(uuid):
     return min(12 + (len(hist) - 1) * 6, 24)  # 12s, 18s, 24s cap, within a 90s window
 
 
-def now_state():
-    """Everything the /now monitor needs in one poll: live stream status, the
-    player's current block/segment, and the queue."""
-    st = {}
+_JF_TOKEN = {}  # cached (base, tok, uid) so browse endpoints don't re-auth per request
+
+
+def _jf_creds():
+    now = time.time()
+    if _JF_TOKEN and now - _JF_TOKEN["at"] < 600:
+        return _JF_TOKEN["base"], _JF_TOKEN["tok"], _JF_TOKEN["uid"]
+    base, tok, uid = jellyfin_client.auth()
+    _JF_TOKEN.update(base=base, tok=tok, uid=uid, at=now)
+    return base, tok, uid
+
+
+def _with_urls(recs):
+    """Copy each browse record and attach a playable Jellyfin stream URL (never
+    mutate music_browser's cached records with an expiring token)."""
     try:
-        with open(PLAYER_STATE_FILE) as f:
-            st = json.load(f)
+        base, tok, _ = _jf_creds()
+        return [dict(r, url=jellyfin_client.track_url(base, tok, r["id"])) for r in recs]
     except Exception:
-        st = {}
-    return {"player_active": _player_active(), "state": st,
+        return [dict(r) for r in recs]
+
+
+# --- live on-air state -------------------------------------------------------
+# The panel OWNS the live state in memory. The player pushes an event on every
+# transition (render-start / segment-start / each track boundary / idle) to
+# POST /api/player/state; the panel fans it out to /now over SSE. The file is
+# only a restart-recovery snapshot the panel writes -- never the live channel.
+_PLAYER_STATE = {}
+_STATE_LOCK = threading.Lock()
+_STATE_SUBS = set()   # a queue.Queue per open SSE connection
+_LAST_PUSH = 0.0
+try:
+    with open(PLAYER_STATE_FILE) as _f:
+        _PLAYER_STATE = json.load(_f)
+        _LAST_PUSH = time.time() - 6  # trust the snapshot briefly; heartbeat re-confirms
+except Exception:
+    pass
+
+
+def _persist_state(st):
+    try:
+        tmp = PLAYER_STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(st, f)
+        os.replace(tmp, PLAYER_STATE_FILE)
+    except OSError:
+        pass
+
+
+def now_state():
+    """Everything /now needs: the live in-memory player state + stream/queue/cast.
+    `player_active` is push-freshness -- the player heartbeats every 5s, so a
+    state older than 12s (or never seen) means it isn't on air."""
+    with _STATE_LOCK:
+        st = dict(_PLAYER_STATE)
+    active = bool(_LAST_PUSH and time.time() - _LAST_PUSH < 12)
+    return {"player_active": active, "state": st,
             "queue": block_render.load_queue(), "stream": icecast_status(),
             "stream_url": STREAM_URL, "cast": _cast_target_read()}
+
+
+def _receive_state(st):
+    """A push from the player: become the new authority, persist, fan out."""
+    global _PLAYER_STATE, _LAST_PUSH
+    with _STATE_LOCK:
+        _PLAYER_STATE = st or {}
+        _LAST_PUSH = time.time()
+        subs = list(_STATE_SUBS)
+    _persist_state(st or {})
+    payload = now_state()
+    for q in subs:
+        try:
+            q.put_nowait(payload)
+        except queue.Full:
+            pass
+
+
+def _now_ticker():
+    """Refresh ambient fields (listeners/cast/queue) for open streams and act as
+    the SSE keepalive; on-air changes arrive instantly via the player push."""
+    while True:
+        time.sleep(4)
+        with _STATE_LOCK:
+            subs = list(_STATE_SUBS)
+        if not subs:
+            continue
+        payload = now_state()
+        for q in subs:
+            try:
+                q.put_nowait(payload)
+            except queue.Full:
+                pass
 
 
 def _api_route(path):
@@ -566,6 +649,40 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def _sse_now(self):
+        """Server-Sent Events stream of the live now-payload. Sends the current
+        state on connect, then every push/refresh; the handler thread blocks here
+        for the life of the connection (ThreadingHTTPServer gives it its own)."""
+        q = queue.Queue(maxsize=16)
+        with _STATE_LOCK:
+            _STATE_SUBS.add(q)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")  # don't let a proxy buffer it
+            self.end_headers()
+            self.wfile.write(b"retry: 3000\n\n")
+            self._sse_send(now_state())
+            while True:
+                try:
+                    payload = q.get(timeout=15)
+                except queue.Empty:
+                    self.wfile.write(b": ka\n\n")  # keepalive comment
+                    self.wfile.flush()
+                    continue
+                self._sse_send(payload)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # client went away
+        finally:
+            with _STATE_LOCK:
+                _STATE_SUBS.discard(q)
+
+    def _sse_send(self, payload):
+        self.wfile.write(b"data: " + json.dumps(payload).encode() + b"\n\n")
+        self.wfile.flush()
+
     def do_GET(self):
         u = urlparse(self.path)
         if u.path in ("/", "/admin", "/admin/"):
@@ -602,6 +719,10 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, "text/html; charset=utf-8", day_page.DAY_PAGE.encode())
         if "/api/" not in u.path and u.path.rstrip("/").endswith("/now"):
             return self._send(200, "text/html; charset=utf-8", now_page.NOW_PAGE.encode())
+        if "/api/" not in u.path and u.path.rstrip("/").endswith("/browse"):
+            return self._send(200, "text/html; charset=utf-8", browse_page.BROWSE_PAGE.encode())
+        if u.path.rstrip("/").endswith("/api/now/stream"):
+            return self._sse_now()
 
         route = _api_route(u.path)
         if route is not None:
@@ -675,6 +796,29 @@ class H(BaseHTTPRequestHandler):
                             if m:
                                 urls.append(m.group(1))
                     return self._send(200, "application/json", json.dumps({"urls": urls}).encode())
+                if route == ["browse", "meta"]:
+                    return self._send(200, "application/json", json.dumps(music_browser.facets()).encode())
+                if route == ["browse", "search"]:
+                    q = parse_qs(u.query).get("q", [""])[0]
+                    return self._send(200, "application/json", json.dumps({"results": _with_urls(music_browser.search(q))}).encode())
+                if route == ["browse", "random"]:
+                    r = music_browser.random_track()
+                    return self._send(200, "application/json", json.dumps(_with_urls([r])[0] if r else None).encode())
+                if len(route) == 3 and route[0] == "browse" and route[1] == "track":
+                    r = music_browser.get(route[2])
+                    if not r:
+                        return self._send(404, "text/plain", b"not found")
+                    return self._send(200, "application/json", json.dumps(_with_urls([r])[0]).encode())
+                if len(route) == 3 and route[0] == "browse" and route[1] == "similar":
+                    q = parse_qs(u.query)
+                    moods = q.get("moods", [""])[0]
+                    res = music_browser.similar(
+                        route[2], k=int(q.get("k", ["40"])[0]),
+                        studio_only=q.get("studio", ["1"])[0] not in ("0", "false"),
+                        era=(q.get("era", [""])[0] or None),
+                        moods=(moods.split(",") if moods else None))
+                    return self._send(200, "application/json", json.dumps(
+                        {"seed": music_browser.get(route[2]), "results": _with_urls(res)}).encode())
             except FileNotFoundError:
                 return self._send(404, "text/plain", b"not found")
             except Exception as e:
@@ -683,6 +827,15 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
+        if u.path.endswith("/api/player/state"):
+            # Internal: the player publishes its live on-air state here. Localhost
+            # only -- nobody on the LAN gets to spoof what's on air.
+            if (self.client_address or ("",))[0] not in ("127.0.0.1", "::1", "localhost"):
+                return self._send(403, "text/plain", b"forbidden")
+            n = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+            _receive_state(body)
+            return self._send(200, "application/json", b'{"ok":true}')
         if u.path.endswith("/api/rs/air"):
             n = int(self.headers.get("Content-Length", 0) or 0)
             body = self.rfile.read(n) if n else b"{}"
@@ -822,6 +975,28 @@ class H(BaseHTTPRequestHandler):
                                             prerender=body.get("prerender", True),
                                             start_index=int(body.get("start_index", 0)))
                     return self._send(200, "application/json", json.dumps(result).encode())
+                if route == ["browse", "navigate"]:
+                    filt = body.get("filters") or {}
+                    res = music_browser.nearest(
+                        body["vec"], k=int(body.get("k", 40)),
+                        studio_only=filt.get("studio_only", True),
+                        era=filt.get("era") or None, moods=filt.get("moods") or None,
+                        themes=filt.get("themes") or None, exclude=body.get("exclude") or None)
+                    return self._send(200, "application/json", json.dumps({"results": _with_urls(res)}).encode())
+                if route == ["browse", "build"]:
+                    # Air a hand-picked crate: one music segment with an explicit
+                    # track_ids list (resolve_music_segment builds the playlist).
+                    ids = body.get("track_ids") or []
+                    if not ids:
+                        return self._send(400, "text/plain", b"no track_ids")
+                    title = body.get("title") or ("Crate · " + datetime.now().strftime("%b %-d %H:%M"))
+                    seg = {"id": "music_1", "role": "music_1", "type": "music",
+                           "params": {"track_ids": ids, "duration_s": int(body.get("duration_s") or 0)}}
+                    block = block_render.create_block_from_segments(title, [seg])
+                    air = body.get("air")
+                    if air in ("now", "queue"):
+                        schedule_block(block["id"], air, prerender=False)
+                    return self._send(200, "application/json", json.dumps({"block": block, "aired": air}).encode())
             except FileNotFoundError:
                 return self._send(404, "text/plain", b"not found")
             except Exception as e:
@@ -858,4 +1033,5 @@ if __name__ == "__main__":
     except Exception:
         pass
     threading.Thread(target=_scheduler_tick, daemon=True).start()
+    threading.Thread(target=_now_ticker, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()
