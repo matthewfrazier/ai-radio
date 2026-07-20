@@ -1056,6 +1056,36 @@ class JellyfinClientTests(unittest.TestCase):
         self.assertIn("tok123", url)
         self.assertIn("audioBitRate=128000", url)
 
+    def test_auth_reuses_one_token_per_process(self):
+        # A shared DeviceId made every re-auth invalidate the prior token (and
+        # the music URLs that embedded it). auth() now mints once and reuses.
+        conf = {"JELLYFIN_URL": "http://h:8096", "JELLYFIN_USER": "u", "JELLYFIN_PASS": "p"}
+        reqs = []
+
+        class Resp:
+            def __init__(self, n):
+                self.n = n
+
+            def read(self):
+                return json.dumps({"AccessToken": "tok%d" % self.n, "User": {"Id": "uid"}}).encode()
+
+        def fake_urlopen(req, timeout=10):
+            reqs.append(req)
+            return Resp(len(reqs))
+
+        with patch.object(jellyfin_client, "_TOKEN", {}), \
+             patch("urllib.request.urlopen", fake_urlopen):
+            _, t1, _ = jellyfin_client.auth(conf)
+            _, t2, _ = jellyfin_client.auth(conf)
+            self.assertEqual(t1, t2)          # reused, not re-minted
+            self.assertEqual(len(reqs), 1)    # exactly one network auth
+            _, t3, _ = jellyfin_client.auth(conf, force=True)
+            self.assertNotEqual(t3, t1)       # force deliberately re-mints
+            self.assertEqual(len(reqs), 2)
+        hdr = reqs[0].headers["X-emby-authorization"]
+        self.assertIn(jellyfin_client._DEVICE_ID, hdr)
+        self.assertNotIn("te-radio-38", hdr)  # no shared, collision-prone id
+
 
 class MusicBrowserTests(unittest.TestCase):
     """Compact browse index build + pure-Python weighted kNN / facets / search."""

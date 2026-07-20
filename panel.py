@@ -437,7 +437,10 @@ def _jf_creds():
     now = time.time()
     if _JF_TOKEN and now - _JF_TOKEN["at"] < 600:
         return _JF_TOKEN["base"], _JF_TOKEN["tok"], _JF_TOKEN["uid"]
-    base, tok, uid = jellyfin_client.auth()
+    # force a genuine re-mint past the TTL so the panel recovers if its token was
+    # invalidated out of band -- safe now that DeviceId is per-process (this only
+    # rotates the PANEL's own token, never the player's in-flight music URLs).
+    base, tok, uid = jellyfin_client.auth(force=True)
     _JF_TOKEN.update(base=base, tok=tok, uid=uid, at=now)
     return base, tok, uid
 

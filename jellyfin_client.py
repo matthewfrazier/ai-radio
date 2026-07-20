@@ -2,14 +2,29 @@
 """Shared Jellyfin client: auth, library/playlist listing, track resolution.
 
 Used by jf_source.py (CLI, unchanged output shape) and block_render.py
-(music-segment resolution). Re-authenticates on every call, same as the
-original jf_source.py — no token caching.
+(music-segment resolution). Authenticates once per process and reuses the
+token: Jellyfin invalidates a device's prior token on re-auth, so a shared
+DeviceId let concurrent clients knock each other's tokens dead (music URLs
+embed the token and 401'd mid-air). DeviceId is now unique per process and
+the token is cached; pass auth(force=True) to deliberately re-mint.
 """
 import json
+import threading
 import urllib.parse
 import urllib.request
+import uuid
 
 CONF_DEFAULT = "/opt/writ-fm/jellyfin.conf"
+
+# One DeviceId per PROCESS. Jellyfin ties a token to its device and invalidates
+# the prior token whenever the same device re-authenticates -- so a shared,
+# hardcoded DeviceId made the panel, player, jf_source and every music segment
+# all mint on ONE device and knock each other's tokens dead. Music URLs embed
+# api_key=<token>, so an earlier segment's URLs 401'd mid-air the moment anything
+# else re-authed. A unique per-process id keeps each process's token independent.
+_DEVICE_ID = "te-radio-" + uuid.uuid4().hex[:12]
+_TOKEN_LOCK = threading.Lock()
+_TOKEN = {}  # cached (base, tok, uid) for THIS process -- reused, not re-minted
 
 
 def load_conf(path=CONF_DEFAULT):
@@ -23,15 +38,24 @@ def load_conf(path=CONF_DEFAULT):
     return c
 
 
-def auth(conf=None):
-    c = conf or load_conf()
-    body = json.dumps({"Username": c["JELLYFIN_USER"], "Pw": c["JELLYFIN_PASS"]}).encode()
-    req = urllib.request.Request(
-        c["JELLYFIN_URL"] + "/Users/AuthenticateByName", data=body,
-        headers={"Content-Type": "application/json",
-                 "X-Emby-Authorization": 'MediaBrowser Client="te-radio", Device="te-radio", DeviceId="te-radio-38", Version="1.0"'})
-    r = json.loads(urllib.request.urlopen(req, timeout=10).read())
-    return c["JELLYFIN_URL"], r["AccessToken"], r["User"]["Id"]
+def auth(conf=None, force=False):
+    """Authenticate once per process and reuse the token. Re-minting on the same
+    device invalidates the prior token (and any music URL that embedded it), so
+    callers share one cached token instead of each minting a fresh one. Pass
+    force=True to re-mint (e.g. after a token was invalidated out of band)."""
+    with _TOKEN_LOCK:
+        if _TOKEN and not force:
+            return _TOKEN["base"], _TOKEN["tok"], _TOKEN["uid"]
+        c = conf or load_conf()
+        body = json.dumps({"Username": c["JELLYFIN_USER"], "Pw": c["JELLYFIN_PASS"]}).encode()
+        req = urllib.request.Request(
+            c["JELLYFIN_URL"] + "/Users/AuthenticateByName", data=body,
+            headers={"Content-Type": "application/json",
+                     "X-Emby-Authorization": 'MediaBrowser Client="te-radio", Device="te-radio", DeviceId="%s", Version="1.0"' % _DEVICE_ID})
+        r = json.loads(urllib.request.urlopen(req, timeout=10).read())
+        base, tok, uid = c["JELLYFIN_URL"], r["AccessToken"], r["User"]["Id"]
+        _TOKEN.update(base=base, tok=tok, uid=uid)
+        return base, tok, uid
 
 
 def jget(base, tok, path):
