@@ -37,6 +37,7 @@ STUBENV = os.path.join(BASE, ".stubenv")
 STATE_URL = "http://127.0.0.1:8080/api/player/state"  # panel owns the live state
 FILLER_WAV = os.path.join(BASE, ".cutover_filler.wav")
 IDLE_PLAYLIST = os.path.join(BASE, "music_playlist.txt")
+IDLE_META = os.path.join(BASE, "music_playlist_meta.json")  # per-track name/dur, playlist order
 
 _stop_requested = False
 _skip_block = False
@@ -95,6 +96,45 @@ def track_state(base, tracks, cur):
     lab = br.track_label(t)
     return dict(base, phase="airing", track_index=cur, track_count=len(tracks),
                 track_title=lab, on_air=lab, started_at=br.now_iso())
+
+
+def load_idle_meta():
+    """Per-track [{name,artist,duration_s}] in playlist order, written alongside
+    music_playlist.txt by jf_source. Absent/malformed -> [] (idle stays generic)."""
+    try:
+        with open(IDLE_META) as f:
+            m = json.load(f)
+        return m if isinstance(m, list) else []
+    except Exception:
+        return []
+
+
+def idle_plan(meta):
+    """(labels, bounds, total_bytes) for byte-boundary track detection over the
+    looped idle playlist. bounds[i] is the cumulative byte offset at the END of
+    track i (== elapsed audio, since the sink is -re paced s16le stereo). Tracks
+    with no positive duration are dropped -- they can't be located by bytes."""
+    labels, bounds, acc = [], [], 0.0
+    for t in meta:
+        d = t.get("duration_s") or 0
+        if d <= 0:
+            continue
+        acc += d
+        labels.append(br.track_label(t))
+        bounds.append(acc * BYTES_PER_SEC)
+    return labels, bounds, acc * BYTES_PER_SEC
+
+
+def idle_index(written, bounds, total):
+    """Current track index for `written` sink bytes, wrapping each playlist loop
+    (idle uses -stream_loop -1). Returns 0 when no usable bounds."""
+    if not bounds or total <= 0:
+        return 0
+    pos = written % total
+    for i, b in enumerate(bounds):
+        if pos < b:
+            return i
+    return len(bounds) - 1
 
 
 def _on_stop(signum, frame):
@@ -417,12 +457,26 @@ def run_idle(sink, srcpw):
         log("no idle playlist (%s), exiting to fallback" % IDLE_PLAYLIST)
         return False
     log("queue empty -- holding mount with idle music loop")
+    # Name the CURRENT idle track (like a segment's tracks) so /now shows what's
+    # audible during the between-blocks mix, not just "Idle music mix". The idle
+    # producer is one looping concat ffmpeg, so infer the track from bytes
+    # written (== elapsed audio); metadata is written by jf_source in playlist
+    # order. No metadata -> generic label, unchanged behaviour.
+    labels, bounds, total = idle_plan(load_idle_meta())
+
+    def idle_state(cur):
+        base = {"phase": "idle", "idle": True, "air_fill": "idle music",
+                "mix": "Idle music mix", "started_at": br.now_iso()}
+        if labels:
+            return dict(base, on_air=labels[cur], track_title=labels[cur],
+                        track_index=cur, track_count=len(labels))
+        return dict(base, on_air="Idle music mix")
+
     # Explicit idle marker (not clear_state) so /now can distinguish "player is
     # holding the stream with idle music" from "player off, fallback loop on".
-    write_state({"phase": "idle", "idle": True, "on_air": "Idle music mix",
-                 "air_fill": "idle music", "started_at": br.now_iso()})
+    write_state(idle_state(0))
     proc = subprocess.Popen(idle_cmd(), stdout=subprocess.PIPE)
-    pushed = False
+    pushed, written, cur = False, 0, 0
     try:
         while not _stop_requested and not _skip_block:
             if br.load_queue():
@@ -432,10 +486,17 @@ def run_idle(sink, srcpw):
                 log("idle producer ended unexpectedly, exiting to fallback")
                 return False
             sink.write(chunk)
+            if labels:
+                written += len(chunk)
+                nxt = idle_index(written, bounds, total)
+                if nxt != cur:
+                    cur = nxt
+                    write_state(idle_state(cur))
+                    push_metadata_async(srcpw, labels[cur])
             if not pushed:
                 # Retry each iteration (~0.4s) until it sticks -- Icecast 400s a
                 # metadata update until the freshly-connected source is ready.
-                pushed = push_metadata(srcpw, "ai-radio · music mix")
+                pushed = push_metadata(srcpw, labels[0] if labels else "ai-radio · music mix")
     finally:
         proc.terminate()
         proc.wait()

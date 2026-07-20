@@ -131,9 +131,15 @@ def tracks_by_ids(ids, limit=500):
     if not ids:
         return []
     base, tok, uid = auth()
-    items = jget(base, tok, "/Users/%s/Items?Ids=%s&IncludeItemTypes=Audio&Recursive=true&Limit=%d"
-                 % (uid, urllib.parse.quote(",".join(ids)), len(ids)))
-    by_id = {i["Id"]: i for i in items.get("Items", [])}
+    # Chunk the Ids= query: a few hundred ids overflow the request URI (Jellyfin
+    # 414s at ~500). 100/call keeps the URL well under any limit.
+    by_id = {}
+    for c in range(0, len(ids), 100):
+        chunk = ids[c:c + 100]
+        items = jget(base, tok, "/Users/%s/Items?Ids=%s&IncludeItemTypes=Audio&Recursive=true&Limit=%d"
+                     % (uid, urllib.parse.quote(",".join(chunk)), len(chunk)))
+        for i in items.get("Items", []):
+            by_id[i["Id"]] = i
     out = []
     for tid in ids:
         i = by_id.get(tid)

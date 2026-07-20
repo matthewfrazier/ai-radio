@@ -642,8 +642,9 @@ function renderNow(nowd){
   }
   if(phase==='idle' || st.idle || !st.block_id){
     card.className='nowcard';
+    const named=st.track_count, ctx=named?(esc(st.mix||'Idle mix')+' &middot; track '+((st.track_index??0)+1)+' of '+st.track_count):'between blocks — queue a block or press ▶ on a segment';
     card.innerHTML=`<div class="line1"><span class="badge">idle</span> <span class="segt">${esc(st.on_air||'Idle music mix')}</span></div>
-      <div class="meta">between blocks — queue a block or press ▶ on a segment &middot; <span id="elapsed">${fmtElapsed(airingStartedMs)}</span></div>`;
+      <div class="meta">${ctx} &middot; <span id="elapsed">${fmtElapsed(airingStartedMs)}</span></div>`;
     setNav(-1,0); return;
   }
   // airing a segment

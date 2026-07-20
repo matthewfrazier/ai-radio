@@ -516,6 +516,38 @@ class NowPlayingStateTests(unittest.TestCase):
         self.assertEqual(s["track_count"], 0)
         self.assertEqual(s["track_title"], "Music")
 
+    def test_idle_plan_builds_cumulative_byte_bounds(self):
+        import block_player
+        bps = block_player.BYTES_PER_SEC
+        meta = [{"artist": "A", "name": "One", "duration_s": 10},
+                {"artist": "B", "name": "Two", "duration_s": 5}]
+        labels, bounds, total = block_player.idle_plan(meta)
+        self.assertEqual(labels, ["A — One", "B — Two"])
+        self.assertEqual(bounds, [10 * bps, 15 * bps])
+        self.assertEqual(total, 15 * bps)
+
+    def test_idle_plan_drops_zero_duration_tracks(self):
+        import block_player
+        meta = [{"name": "Ghost", "duration_s": 0}, {"name": "Real", "duration_s": 3}]
+        labels, bounds, total = block_player.idle_plan(meta)
+        self.assertEqual(labels, ["Real"])  # can't locate a 0-length track by bytes
+        self.assertEqual(total, 3 * block_player.BYTES_PER_SEC)
+
+    def test_idle_index_locates_track_and_wraps_each_loop(self):
+        import block_player
+        bps = block_player.BYTES_PER_SEC
+        _, bounds, total = block_player.idle_plan(
+            [{"name": "One", "duration_s": 10}, {"name": "Two", "duration_s": 5}])
+        self.assertEqual(block_player.idle_index(0, bounds, total), 0)
+        self.assertEqual(block_player.idle_index(9 * bps, bounds, total), 0)
+        self.assertEqual(block_player.idle_index(10 * bps, bounds, total), 1)
+        # -stream_loop -1: bytes past the total wrap back to the first track
+        self.assertEqual(block_player.idle_index(16 * bps, bounds, total), 0)
+
+    def test_idle_index_no_bounds_is_safe(self):
+        import block_player
+        self.assertEqual(block_player.idle_index(999, [], 0), 0)
+
     def test_now_state_serves_in_memory_state(self):
         # The panel OWNS the live state in memory (fed by the player push); a
         # fresh push means player_active. now_state passes it through verbatim.
