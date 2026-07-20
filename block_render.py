@@ -60,7 +60,7 @@ DEFAULT_STATION_CFG = {"kokoro": "http://192.168.1.74:8880", "voice": "am_michae
                        "cutover_filler": True,
                        "cutover_filler_text": "Operator switching tracks, one moment.",
                        # station identity for time-check / station-ID tts segments.
-                       "station_name": "WRIT-FM", "timezone": "America/New_York"}
+                       "station_name": "HOME-FM", "timezone": "America/New_York"}
 DEFAULT_TTS_TTL_S = 1800
 # How long a resolved live/music segment stays valid before render_block
 # re-resolves it. Kept generous so a cutover/scrub within the airing hour
@@ -394,7 +394,7 @@ def render_tts_segment(bdir, seg, cfg, context=None):
     # station identity flows in for time_check / station_id (per-segment
     # override still wins if the params carry their own).
     params = dict(seg["params"])
-    params.setdefault("station_name", cfg.get("station_name", "WRIT-FM"))
+    params.setdefault("station_name", cfg.get("station_name", "HOME-FM"))
     params.setdefault("timezone", cfg.get("timezone", "America/New_York"))
     text, title = build_tts_text(params["topic"], params, context)
     engine = seg["params"].get("engine", "kokoro")

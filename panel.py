@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal control panel for the ai-radio WRIT-FM radio.
+"""Minimal control panel for the ai-radio HOME-FM radio.
 
 Exposes the knobs that actually shape the broadcast — Kokoro endpoint, voice,
 speed, and the script the DJ reads — auditions voices in-page, then re-renders
@@ -48,10 +48,10 @@ DEFAULT = {
     "voice": "am_michael",
     "speed": 1.0,
     "segments": [
-        "You are listening to WRIT F M, standing up on threadeval, the twenty four seven A I talk radio experiment. Now with a real voice.",
+        "You are listening to HOME F M, standing up on threadeval, the twenty four seven A I talk radio experiment. Now with a real voice.",
         "Station note. The stub espeak voice is retired. Speech is now synthesized by Kokoro, running on a real G P U across the tailnet, and streamed over Icecast.",
         "Time check. The operator still has nothing better to do, so the broadcast continues, unlike a certain D J who quit.",
-        "WRIT F M. Reachable, disposable, and spun up by the repo stand up pattern. If this is not worth your time, it will be spun right back down.",
+        "HOME F M. Reachable, disposable, and spun up by the repo stand up pattern. If this is not worth your time, it will be spun right back down.",
     ],
 }
 
@@ -704,7 +704,7 @@ class H(BaseHTTPRequestHandler):
             try:
                 audio = kokoro_speech(cfg["kokoro"], q.get("voice", ["am_michael"])[0],
                                       q.get("speed", ["1.0"])[0],
-                                      q.get("text", ["This is WRIT FM."])[0], fmt="mp3")
+                                      q.get("text", ["This is HOME FM."])[0], fmt="mp3")
                 return self._send(200, "audio/mpeg", audio)
             except Exception as e:
                 return self._send(502, "text/plain", str(e).encode())
