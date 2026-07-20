@@ -71,6 +71,17 @@ def save_cfg(c):
         json.dump(c, f, indent=2)
 
 
+# Icecast serves each new listener a burst of buffered audio on connect
+# (burst-size in icecast.xml), so the stream a listener hears trails what the
+# player is feeding the mount by burst_bytes / byte_rate. The mount is MP3 128k
+# (see block_player Sink). This is the server-side floor of "behind live"; the
+# listener's own player adds a variable client-side jitter buffer on top, which
+# /now measures in the browser when playing locally.
+_STREAM_BURST_BYTES = 65536      # icecast.xml <burst-size>
+_STREAM_BYTE_RATE = 128000 / 8   # 128 kbps mount
+_STREAM_BUFFER_S = round(_STREAM_BURST_BYTES / _STREAM_BYTE_RATE, 1)
+
+
 def icecast_status():
     try:
         with urllib.request.urlopen(ICECAST + "/status-json.xsl", timeout=4) as r:
@@ -85,6 +96,7 @@ def icecast_status():
         # &#8212;, accents -> &#nnn;); decode so /now shows real characters.
         # (Direct listeners and Cast read the raw ICY title, unaffected.)
         return {"live": True, "listeners": m.get("listeners", 0),
+                "buffer_s": _STREAM_BUFFER_S,
                 "title": html.unescape(m.get("title") or m.get("server_name", ""))}
     except Exception:
         return {"live": False, "listeners": 0}

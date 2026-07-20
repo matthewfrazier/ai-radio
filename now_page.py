@@ -173,6 +173,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface-2);padd
   <div class="status" id="statusbar">
     <span><span id="sdot" class="dot"></span>Stream <span id="sstate">?</span> <span id="listeners"></span></span>
     <span id="stitle"></span>
+    <span id="behind" class="sub" title="the monitor shows what's fed to the mount now; a listener hears it this much later (Icecast buffer + your player's buffer)"></span>
   </div>
   <div class="row transport">
     <button class="ghost icon-btn" id="btnPrev" type="button" title="skip to previous segment" disabled>◀</button>
@@ -719,6 +720,21 @@ function renderDiag(n){
   $('diag').innerHTML=rows.map(r=>`<div>${r[0]}</div><div><b>${r[1]}</b></div>`).join('');
 }
 
+// How far a listener trails the monitor. The Icecast burst (server, s.buffer_s)
+// is a floor; a listener's own player adds a jitter buffer. When we ARE playing
+// locally we can read that client buffer straight off the <audio> element
+// (received-but-not-yet-played = buffered.end - currentTime) for a real total;
+// otherwise we can only show the server floor.
+function behindLiveLabel(s){
+  let secs = s.buffer_s || 0;
+  const a=$('player');
+  if(a && !a.hidden && !a.paused && a.buffered && a.buffered.length){
+    const client = a.buffered.end(a.buffered.length-1) - a.currentTime;
+    if(client > 0) secs += client;
+  }
+  return '≈'+Math.round(secs)+'s behind live';
+}
+
 function applyNow(n){
   reconcileOutput(n.cast);
   updateOutputMode(n);
@@ -727,6 +743,7 @@ function applyNow(n){
   $('sdot').className='dot '+(s.live?'live':'bad');
   $('listeners').textContent=s.live?('· '+(s.listeners||0)+' listening'):'';
   $('stitle').textContent=s.title?('“'+s.title+'”'):'';
+  $('behind').textContent=s.live?('· '+behindLiveLabel(s)):'';
   const st=n.state||{};
   const prevA=airingId;
   airingId=n.player_active?(st.block_id||''):'';
