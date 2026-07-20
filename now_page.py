@@ -5,64 +5,9 @@ tabbed workspace (Editor / Details / Blocks / Generate) walks from the most
 specific container (a segment) out to the most general (the block generator),
 with diagnostics + the run log at the foot. Zero-framework, CSP-safe."""
 
-NOW_PAGE = """<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ai-radio &middot; now</title>
-<style>
-:root{
-  color-scheme:light dark;
-  --bg:#0d1117;--surface:#161b22;--surface-2:#1c2431;--surface-3:#232d3b;
-  --border:#2a3644;--border-strong:#3a4757;
-  --text:#e6edf3;--muted:#93a1b0;--faint:#7f8c9b;
-  --primary:#4c8dfb;--primary-fg:#0b1220;--primary-weak:#4c8dfb26;
-  --success:#2fbf6b;--success-weak:#2fbf6b1f;--warn:#f0a935;--warn-weak:#f0a9351f;
-  --danger:#f26d6d;--danger-weak:#f26d6d1f;
-  --live:#2dd4bf;--live-weak:#2dd4bf24;--music:#a78bfa;--music-weak:#a78bfa24;--tts:#f472b6;--tts-weak:#f472b624;
-  --font:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  --fs-xs:.72rem;--fs-sm:.82rem;--fs-md:.92rem;--fs-lg:1.1rem;--fs-xl:1.35rem;
-  --lh:1.45;--fw-med:600;--fw-bold:700;--track-caps:.04em;
-  --s1:.25rem;--s2:.5rem;--s3:.75rem;--s4:1rem;--s5:1.5rem;--s6:2rem;--s7:3rem;
-  --r-sm:8px;--r-md:12px;--r-lg:16px;--r-pill:999px;
-  --tap:44px;--ctl-h:44px;--ctl-h-sm:40px;--ctl-pad-x:.85rem;
-  --sh-1:0 1px 2px rgba(0,0,0,.35);--sh-2:0 6px 20px rgba(0,0,0,.45);
-  --focus:0 0 0 2px var(--bg),0 0 0 4px var(--primary);--maxw:760px;
-}
-@media (prefers-color-scheme:light){:root:not([data-theme="dark"]){
-  --bg:#f5f7fa;--surface:#fff;--surface-2:#eef2f7;--surface-3:#e4eaf1;
-  --border:#d7dee7;--border-strong:#c2ccd8;--text:#141c26;--muted:#586573;--faint:#707b89;
-  --primary:#2563eb;--primary-fg:#fff;--primary-weak:#2563eb14;
-  --success:#15a34a;--success-weak:#15a34a17;--warn:#c2790a;--warn-weak:#c2790a17;
-  --danger:#dc2626;--danger-weak:#dc262617;
-  --live:#0d9488;--live-weak:#0d948817;--music:#7c3aed;--music-weak:#7c3aed17;--tts:#db2777;--tts-weak:#db277717;
-  --sh-1:0 1px 2px rgba(16,24,40,.08);--sh-2:0 8px 24px rgba(16,24,40,.12);
-}}
-:root[data-theme="light"]{
-  --bg:#f5f7fa;--surface:#fff;--surface-2:#eef2f7;--surface-3:#e4eaf1;
-  --border:#d7dee7;--border-strong:#c2ccd8;--text:#141c26;--muted:#586573;--faint:#8a97a5;
-  --primary:#2563eb;--primary-fg:#fff;--primary-weak:#2563eb14;
-  --success:#15a34a;--success-weak:#15a34a17;--warn:#c2790a;--warn-weak:#c2790a17;
-  --danger:#dc2626;--danger-weak:#dc262617;
-  --live:#0d9488;--live-weak:#0d948817;--music:#7c3aed;--music-weak:#7c3aed17;--tts:#db2777;--tts-weak:#db277717;
-  --sh-1:0 1px 2px rgba(16,24,40,.08);--sh-2:0 8px 24px rgba(16,24,40,.12);
-}
-*{box-sizing:border-box}html,body{margin:0}
-body{font-family:var(--font);color:var(--text);background:var(--bg);max-width:var(--maxw);margin:0 auto;padding:var(--s3) var(--s3) var(--s7);line-height:var(--lh);font-size:var(--fs-md);-webkit-text-size-adjust:100%}
-a{color:var(--primary);text-decoration:none}a:hover{text-decoration:underline}
-:focus-visible{outline:none;box-shadow:var(--focus);border-radius:var(--r-sm)}
-h1{font-size:var(--fs-xl);margin:var(--s1) 0;letter-spacing:-.01em}
-h2{font-size:var(--fs-sm);margin:0;text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);font-weight:var(--fw-med)}
-.sub{color:var(--muted);font-size:var(--fs-sm);margin-bottom:var(--s4)}
-.mb4{margin:0 0 var(--s2)}
-.appbar{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s3);flex-wrap:wrap;margin-bottom:var(--s2)}
-.nav{display:flex;gap:var(--s1);flex-wrap:wrap;align-items:center;font-size:var(--fs-sm);margin-bottom:var(--s3)}
-.nav a{color:var(--muted);padding:var(--s1) var(--s2);border-radius:var(--r-pill);min-height:var(--tap);display:inline-flex;align-items:center}
-.nav a:hover{background:var(--surface-2);color:var(--text);text-decoration:none}
-.nav a[aria-current="page"]{background:var(--primary-weak);color:var(--primary)}
-section{margin:0 0 var(--s5)}
-section>.hd2{display:flex;align-items:center;gap:var(--s2);border-bottom:1px solid var(--border);padding-bottom:var(--s2);margin-bottom:var(--s3)}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:var(--s4);box-shadow:var(--sh-1)}
-.hd2 .spacer{margin-left:auto}
+import web
+
+NOW_CSS = """
 /* --- sticky monitor: only what must never leave view (now-card + status +
    skip) pins; output + the air button scroll away so the workspace isn't crushed --- */
 .topzone{position:sticky;top:0;z-index:10;background:var(--bg);padding:var(--s2) 0;box-shadow:0 1px 0 var(--border)}
@@ -87,38 +32,13 @@ section>.hd2{display:flex;align-items:center;gap:var(--s2);border-bottom:1px sol
 .nowcard .prog{height:6px;border-radius:var(--r-pill);background:var(--surface-3);margin-top:var(--s3);overflow:hidden}
 .nowcard .prog>i{display:block;height:100%;background:var(--success);width:0;transition:width .6s ease}
 .now{font-size:var(--fs-md)}.now b{font-weight:var(--fw-med)}
-button{font:inherit;font-size:var(--fs-sm);font-weight:var(--fw-med);min-height:var(--ctl-h);padding:0 var(--ctl-pad-x);border:1px solid transparent;border-radius:var(--r-pill);background:var(--primary);color:var(--primary-fg);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:var(--s1);transition:background .12s,border-color .12s,opacity .12s;white-space:nowrap}
-button:hover{filter:brightness(1.06)}button:active{transform:translateY(1px)}
-button.ghost{background:transparent;color:var(--primary);border-color:var(--border-strong)}
-button.ghost:hover{background:var(--primary-weak);filter:none}
-button.danger{background:transparent;color:var(--danger);border-color:var(--danger)}
-button.danger:hover{background:var(--danger-weak);filter:none}
-button:disabled{opacity:.4;cursor:not-allowed;filter:none;transform:none}
-.mini{min-height:var(--ctl-h-sm);padding:0 var(--s3);font-size:var(--fs-sm)}
-.icon-btn{min-width:var(--ctl-h-sm);padding:0 var(--s2);font-size:var(--fs-md)}
 .playbig{width:100%}
-select,input,textarea{width:100%;box-sizing:border-box;font:inherit;font-size:var(--fs-md);min-height:var(--ctl-h);padding:var(--s2) var(--s3);border:1px solid var(--border-strong);border-radius:var(--r-md);background:var(--surface-2);color:var(--text)}
-select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 18px) 50%,calc(100% - 13px) 50%;background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:2rem}
-input::placeholder,textarea::placeholder{color:var(--faint)}
-input:focus,select:focus,textarea:focus{border-color:var(--primary);outline:none}
-label{display:block;font-size:var(--fs-xs);color:var(--muted);margin:0 0 var(--s1)}
-audio{width:100%;margin:var(--s2) 0;border-radius:var(--r-md)}
-.row{display:flex;gap:var(--s2);flex-wrap:wrap;align-items:center}
 .transport .segpos{flex:1;text-align:center;margin:0}
 .output{flex-wrap:nowrap}
 #target{flex:1;min-width:6rem}
-.status{display:flex;gap:var(--s4);flex-wrap:wrap;align-items:center;font-size:var(--fs-sm);color:var(--muted)}
 .notif{color:var(--warn)}
-.dot{display:inline-block;width:.6rem;height:.6rem;border-radius:50%;background:var(--faint);margin-right:var(--s1);vertical-align:middle}
-.dot.ok,.dot.live{background:var(--success)}.dot.bad{background:var(--danger)}.dot.live{box-shadow:0 0 0 3px var(--success-weak)}
 .castdetails{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-md);padding:var(--s3);font-size:var(--fs-sm);color:var(--muted)}
 .castdetails b{color:var(--text)}
-.badge{display:inline-flex;align-items:center;gap:.3em;font-size:var(--fs-xs);font-weight:var(--fw-med);line-height:1;padding:.32rem .55rem;border-radius:var(--r-pill);background:var(--surface-3);color:var(--muted)}
-.badge.role{background:var(--primary-weak);color:var(--primary)}
-.badge--live{background:var(--live-weak);color:var(--live)}
-.badge--music{background:var(--music-weak);color:var(--music)}
-.badge--tts{background:var(--tts-weak);color:var(--tts)}
-.badge--airing{background:var(--success-weak);color:var(--success)}
 .t-live{--seg-accent:var(--live)}.t-music{--seg-accent:var(--music)}.t-tts{--seg-accent:var(--tts)}
 /* --- tabs: most-specific (segment) -> most-general (generator) --- */
 .tabs{display:flex;gap:3px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-md);padding:3px;margin-bottom:var(--s3);overflow-x:auto;-webkit-overflow-scrolling:touch}
@@ -163,17 +83,15 @@ audio{width:100%;margin:var(--s2) 0;border-radius:var(--r-md)}
 .runlog{font:var(--fs-xs)/1.6 var(--mono);background:#0a0e14;color:#c9d4e0;border:1px solid var(--border);border-radius:var(--r-md);padding:var(--s3);max-height:15rem;overflow:auto;-webkit-overflow-scrolling:touch;scrollbar-width:thin;scrollbar-color:var(--border-strong) transparent}
 .runlog .lt{color:var(--faint);margin-right:var(--s2)}
 .runlog .k{color:var(--primary)}.runlog .w{color:var(--warn)}
-pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface-2);padding:var(--s3);border-radius:var(--r-sm);font:var(--fs-xs)/1.5 var(--mono);max-height:16rem;overflow:auto}
-</style></head><body>
-<div class="appbar"><h1>WRIT-FM &middot; now</h1></div>
-<div class="nav"><a href="/admin">station</a><a href="/blocks">blocks</a><a href="/day">24-hour day</a><a href="/now" aria-current="page">now</a></div>
+"""
+
+NOW_BODY = """
 
 <div class="topzone">
   <div class="now" id="now">loading…</div>
   <div class="status" id="statusbar">
-    <span><span id="sdot" class="dot"></span>Stream <span id="sstate">?</span> <span id="listeners"></span></span>
+    <span title="the monitor shows what's fed to the mount now; a listener hears it this much later (Icecast buffer + your player's buffer)"><span id="sdot" class="dot"></span>Stream <span id="sstate">?</span> <span id="listeners"></span></span>
     <span id="stitle"></span>
-    <span id="behind" class="sub" title="the monitor shows what's fed to the mount now; a listener hears it this much later (Icecast buffer + your player's buffer)"></span>
   </div>
   <div class="row transport">
     <button class="ghost icon-btn" id="btnPrev" type="button" title="skip to previous segment" disabled>◀</button>
@@ -240,8 +158,9 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface-2);padd
   <div class="hd2"><h2>Run log</h2></div>
   <div id="runlog" class="runlog">loading…</div>
 </section>
+"""
 
-<script>
+NOW_JS = """
 const $=id=>document.getElementById(id);
 const BASE=location.pathname.replace(/\\/+$/,'');
 let picked="", airingId="", airingIdx=-1, airingCount=0, airingStartedMs=0;
@@ -725,25 +644,27 @@ function renderDiag(n){
 // locally we can read that client buffer straight off the <audio> element
 // (received-but-not-yet-played = buffered.end - currentTime) for a real total;
 // otherwise we can only show the server floor.
-function behindLiveLabel(s){
+function behindSecs(s){
   let secs = s.buffer_s || 0;
   const a=$('player');
   if(a && !a.hidden && !a.paused && a.buffered && a.buffered.length){
     const client = a.buffered.end(a.buffered.length-1) - a.currentTime;
     if(client > 0) secs += client;
   }
-  return '≈'+Math.round(secs)+'s behind live';
+  return Math.round(secs);
 }
 
 function applyNow(n){
   reconcileOutput(n.cast);
   updateOutputMode(n);
   const s=n.stream||{};
-  $('sstate').textContent=s.live?'live':'offline';
+  // The monitor leads what a listener hears; show that lag inside the state,
+  // e.g. "Stream (-4s) live", rather than as a separate trailing note.
+  const bs=s.live?behindSecs(s):0;
+  $('sstate').textContent=(bs?('(-'+bs+'s) '):'')+(s.live?'live':'offline');
   $('sdot').className='dot '+(s.live?'live':'bad');
   $('listeners').textContent=s.live?('· '+(s.listeners||0)+' listening'):'';
   $('stitle').textContent=s.title?('“'+s.title+'”'):'';
-  $('behind').textContent=s.live?('· '+behindLiveLabel(s)):'';
   const st=n.state||{};
   const prevA=airingId;
   airingId=n.player_active?(st.block_id||''):'';
@@ -890,5 +811,6 @@ document.querySelectorAll('.tab').forEach(t=>{ t.onclick=()=>showTab(t.dataset.t
   setInterval(loadLog, 5000);
   setInterval(loadList, 20000);
 })();
-</script>
-</body></html>"""
+"""
+
+NOW_PAGE = web.page("now", "now", NOW_BODY, css=NOW_CSS, js=NOW_JS)

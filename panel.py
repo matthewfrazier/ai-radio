@@ -33,6 +33,7 @@ import llm_backends
 import music_browser
 import now_page
 import tts_engines
+import web
 
 BASE = "/opt/writ-fm"
 AUDIO = os.path.join(BASE, "stub_audio")
@@ -137,35 +138,15 @@ def apply(cfg):
     return n
 
 
-PAGE = """<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WRIT-FM control</title>
-<style>
-:root{color-scheme:light dark}
-body{font-family:system-ui,sans-serif;max-width:820px;margin:0 auto;padding:1.2rem;line-height:1.4}
-h1{font-size:1.3rem;margin:.2rem 0}
-.sub{opacity:.7;font-size:.85rem;margin-bottom:1rem}
-fieldset{border:1px solid #8884;border-radius:8px;margin:0 0 1rem;padding:.8rem 1rem}
-legend{font-weight:600;padding:0 .4rem}
-label{display:block;font-size:.8rem;opacity:.8;margin:.6rem 0 .2rem}
-input,select,textarea{width:100%;box-sizing:border-box;font:inherit;padding:.4rem;border:1px solid #8886;border-radius:6px;background:transparent;color:inherit}
-textarea{min-height:9rem;resize:vertical;font-family:ui-monospace,monospace;font-size:.85rem}
-.row{display:flex;gap:.8rem;flex-wrap:wrap}
+PAGE_CSS = """
+fieldset{border:1px solid var(--border);border-radius:var(--r-md);margin:0 0 var(--s4);padding:var(--s3) var(--s4)}
+legend{font-weight:var(--fw-med);padding:0 var(--s1)}
+textarea{min-height:9rem;resize:vertical;font-family:var(--mono);font-size:var(--fs-sm)}
 .row>div{flex:1;min-width:9rem}
-button{font:inherit;padding:.5rem 1rem;border:0;border-radius:6px;background:#3b82f6;color:#fff;cursor:pointer}
-button.ghost{background:#8883;color:inherit}
-button:disabled{opacity:.5;cursor:progress}
-.status{display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center;font-size:.85rem;margin-bottom:.6rem}
-.dot{display:inline-block;width:.6rem;height:.6rem;border-radius:50%;background:#888;margin-right:.35rem;vertical-align:middle}
-.dot.ok{background:#22c55e}.dot.bad{background:#ef4444}
-.actions{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center}
-pre{white-space:pre-wrap;background:#8881;padding:.6rem;border-radius:6px;font-size:.78rem;max-height:14rem;overflow:auto}
-audio{width:100%;margin-top:.4rem}
-a{color:#3b82f6}
-</style></head><body>
-<h1>WRIT-FM control</h1>
-<div class="sub">ai-radio &middot; <a href="/blocks">blocks</a> &middot; <a href="/day">24-hour day</a> &middot; <a href="/now">▶ now · listen · cast</a></div>
+.actions{display:flex;gap:var(--s2);flex-wrap:wrap;align-items:center;margin-top:var(--s2)}
+"""
 
+PAGE_BODY = """
 <div class="status">
   <span><span id="kdot" class="dot"></span>Kokoro <span id="kstate">?</span></span>
   <span><span id="sdot" class="dot"></span>Stream <span id="sstate">?</span> <span id="listeners"></span></span>
@@ -180,7 +161,7 @@ a{color:#3b82f6}
     <option value="radioscript">Radioscript hour (NPR news, liked-songs music, weather, markets)</option>
   </select>
   <div id="rsbox" hidden>
-    <div class="status" style="margin-top:.7rem">
+    <div class="status mt3">
       <span><span id="rsjelly" class="dot"></span>Jellyfin music</span>
       <span><span id="rsloc" class="dot"></span>Weather location</span>
       <span id="rslast"></span>
@@ -197,7 +178,7 @@ a{color:#3b82f6}
 <fieldset><legend>Music Source</legend>
   <label>What the music stream plays</label>
   <select id="source"></select>
-  <div class="actions" style="margin-top:.6rem">
+  <div class="actions">
     <button id="btnSource" type="button">Apply source</button>
     <span id="srcmsg" class="sub"></span>
   </div>
@@ -209,8 +190,8 @@ a{color:#3b82f6}
     <div><label>Speed (0.5&ndash;2.0)</label><input id="speed" type="number" min="0.5" max="2" step="0.1"></div>
   </div>
   <label>Audition text</label>
-  <input id="sample" value="This is WRIT F M. Testing the voice for the station.">
-  <div class="actions" style="margin-top:.6rem">
+  <input id="sample" value="This is HOME F M. Testing the voice for the station.">
+  <div class="actions">
     <button class="ghost" id="btnSample" type="button">Play sample</button>
     <button class="ghost" id="btnVoices" type="button">Refresh voices</button>
     <audio id="preview" preload="none"></audio>
@@ -233,8 +214,9 @@ a{color:#3b82f6}
 </div>
 <pre id="log"></pre>
 </div>
+"""
 
-<script>
+PAGE_JS = r"""
 const $=id=>document.getElementById(id);
 // The panel may be mounted under a path prefix (tailscale serve routes /admin -> :8080),
 // so build API URLs from the current path, not relative, or they hit the Icecast root.
@@ -243,7 +225,7 @@ function setDot(el,ok){el.className='dot '+(ok?'ok':'bad');}
 async function loadState(){
   const s=await (await fetch(BASE+'/api/state')).json();
   $('kokoro').value=s.cfg.kokoro; $('speed').value=s.cfg.speed;
-  $('script').value=s.cfg.segments.join('\\n\\n');
+  $('script').value=s.cfg.segments.join('\n\n');
   const sel=$('voice'); sel.innerHTML='';
   (s.voices||[]).forEach(v=>{const o=document.createElement('option');o.value=o.textContent=v;sel.appendChild(o);});
   if(s.voices&&s.voices.includes(s.cfg.voice))sel.value=s.cfg.voice;
@@ -263,7 +245,7 @@ $('btnSample').onclick=()=>{
 };
 $('btnApply').onclick=async()=>{
   const b=$('btnApply'); b.disabled=true; $('msg').textContent='rendering…'; $('log').textContent='';
-  const segs=$('script').value.split(/\\n\\s*\\n/).map(x=>x.trim()).filter(Boolean);
+  const segs=$('script').value.split(/\n\s*\n/).map(x=>x.trim()).filter(Boolean);
   const body={kokoro:$('kokoro').value,voice:$('voice').value,speed:parseFloat($('speed').value),segments:segs};
   try{
     const r=await fetch(BASE+'/api/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -317,8 +299,9 @@ $('btnSource').onclick=async()=>{
   catch(e){$('srcmsg').textContent='ERR '+e;}finally{b.disabled=false;}
 };
 loadSources();
-</script>
-</body></html>"""
+"""
+
+PAGE = web.page("station", "control", PAGE_BODY, css=PAGE_CSS, js=PAGE_JS)
 
 
 PLAYER_UNIT = "writ-block-player.service"

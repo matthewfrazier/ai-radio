@@ -1,91 +1,25 @@
 #!/usr/bin/env python3
-"""/browse -- the music browser. Explore the library through the feature overlay:
+"""/browse -- the Music view. Explore the library through the feature overlay:
 search or surprise a seed track, walk a target point through feature space with
 per-axis nudges/sliders, filter by era/mood/theme + studio/live, preview, and
 collect picks into a crate to build a block and put it on air. Zero-framework,
-CSP-safe; same design tokens as /now."""
+CSP-safe; wrapped in the shared web.page shell (design system + nav + errors).
+Inline `style` is used only for the dynamic feature-bar widths."""
 
-BROWSE_PAGE = """<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ai-radio &middot; browse</title>
-<style>
-:root{
-  color-scheme:light dark;
-  --bg:#0d1117;--surface:#161b22;--surface-2:#1c2431;--surface-3:#232d3b;
-  --border:#2a3644;--border-strong:#3a4757;
-  --text:#e6edf3;--muted:#93a1b0;--faint:#7f8c9b;
-  --primary:#4c8dfb;--primary-fg:#0b1220;--primary-weak:#4c8dfb26;
-  --success:#2fbf6b;--success-weak:#2fbf6b1f;--warn:#f0a935;--warn-weak:#f0a9351f;
-  --danger:#f26d6d;--danger-weak:#f26d6d1f;
-  --live:#2dd4bf;--live-weak:#2dd4bf24;--music:#a78bfa;--music-weak:#a78bfa24;
-  --font:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  --fs-xs:.72rem;--fs-sm:.82rem;--fs-md:.92rem;--fs-lg:1.1rem;--fs-xl:1.35rem;
-  --lh:1.45;--fw-med:600;--fw-bold:700;--track-caps:.04em;
-  --s1:.25rem;--s2:.5rem;--s3:.75rem;--s4:1rem;--s5:1.5rem;--s6:2rem;--s7:3rem;
-  --r-sm:8px;--r-md:12px;--r-lg:16px;--r-pill:999px;
-  --tap:44px;--ctl-h:44px;--ctl-h-sm:40px;--ctl-pad-x:.85rem;
-  --sh-1:0 1px 2px rgba(0,0,0,.35);--focus:0 0 0 2px var(--bg),0 0 0 4px var(--primary);--maxw:760px;
-}
-@media (prefers-color-scheme:light){:root:not([data-theme="dark"]){
-  --bg:#f5f7fa;--surface:#fff;--surface-2:#eef2f7;--surface-3:#e4eaf1;
-  --border:#d7dee7;--border-strong:#c2ccd8;--text:#141c26;--muted:#586573;--faint:#707b89;
-  --primary:#2563eb;--primary-fg:#fff;--primary-weak:#2563eb14;
-  --success:#15a34a;--success-weak:#15a34a17;--warn:#c2790a;--warn-weak:#c2790a17;
-  --danger:#dc2626;--danger-weak:#dc262617;
-  --live:#0d9488;--live-weak:#0d948817;--music:#7c3aed;--music-weak:#7c3aed17;
-  --sh-1:0 1px 2px rgba(16,24,40,.08);
-}}
-:root[data-theme="light"]{
-  --bg:#f5f7fa;--surface:#fff;--surface-2:#eef2f7;--surface-3:#e4eaf1;
-  --border:#d7dee7;--border-strong:#c2ccd8;--text:#141c26;--muted:#586573;--faint:#707b89;
-  --primary:#2563eb;--primary-fg:#fff;--primary-weak:#2563eb14;
-  --success:#15a34a;--success-weak:#15a34a17;--warn:#c2790a;--warn-weak:#c2790a17;
-  --danger:#dc2626;--danger-weak:#dc262617;
-  --live:#0d9488;--live-weak:#0d948817;--music:#7c3aed;--music-weak:#7c3aed17;
-  --sh-1:0 1px 2px rgba(16,24,40,.08);
-}
-*{box-sizing:border-box}html,body{margin:0}
-body{font-family:var(--font);color:var(--text);background:var(--bg);max-width:var(--maxw);margin:0 auto;padding:var(--s3) var(--s3) var(--s7);line-height:var(--lh);font-size:var(--fs-md);-webkit-text-size-adjust:100%}
-a{color:var(--primary);text-decoration:none}a:hover{text-decoration:underline}
-:focus-visible{outline:none;box-shadow:var(--focus);border-radius:var(--r-sm)}
-h1{font-size:var(--fs-xl);margin:var(--s1) 0;letter-spacing:-.01em}
-h2{font-size:var(--fs-sm);margin:0 0 var(--s2);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);font-weight:var(--fw-med)}
-.sub{color:var(--muted);font-size:var(--fs-sm)}
-.appbar{margin-bottom:var(--s2)}
-.nav{display:flex;gap:var(--s1);flex-wrap:wrap;align-items:center;font-size:var(--fs-sm);margin-bottom:var(--s4)}
-.nav a{color:var(--muted);padding:var(--s1) var(--s2);border-radius:var(--r-pill);min-height:var(--tap);display:inline-flex;align-items:center}
-.nav a:hover{background:var(--surface-2);color:var(--text);text-decoration:none}
-.nav a[aria-current="page"]{background:var(--primary-weak);color:var(--primary)}
-section{margin:0 0 var(--s5)}
-button{font:inherit;font-size:var(--fs-sm);font-weight:var(--fw-med);min-height:var(--ctl-h);padding:0 var(--ctl-pad-x);border:1px solid transparent;border-radius:var(--r-pill);background:var(--primary);color:var(--primary-fg);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:var(--s1);white-space:nowrap}
-button:hover{filter:brightness(1.06)}button:active{transform:translateY(1px)}
-button.ghost{background:transparent;color:var(--primary);border-color:var(--border-strong)}
-button.ghost:hover{background:var(--primary-weak)}
-button.danger{background:transparent;color:var(--danger);border-color:var(--danger)}
-button:disabled{opacity:.4;cursor:not-allowed}
-.mini{min-height:var(--ctl-h-sm);padding:0 var(--s3);font-size:var(--fs-sm)}
-.icon-btn{min-width:var(--ctl-h-sm);padding:0 var(--s2)}
-select,input{width:100%;font:inherit;font-size:var(--fs-md);min-height:var(--ctl-h);padding:var(--s2) var(--s3);border:1px solid var(--border-strong);border-radius:var(--r-md);background:var(--surface-2);color:var(--text)}
-input:focus,select:focus{border-color:var(--primary);outline:none}
-.row{display:flex;gap:var(--s2);flex-wrap:wrap;align-items:center}
-.mt2{margin-top:var(--s2)}.mt3{margin-top:var(--s3)}
-.cbx{width:auto;min-height:0;margin-right:.4em}
-.grow{flex:1;min-width:0}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:var(--s4);box-shadow:var(--sh-1)}
-.badge{display:inline-flex;align-items:center;gap:.3em;font-size:var(--fs-xs);font-weight:var(--fw-med);line-height:1;padding:.32rem .55rem;border-radius:var(--r-pill);background:var(--surface-3);color:var(--muted)}
-.badge--live{background:var(--live-weak);color:var(--live)}
-.badge--music{background:var(--music-weak);color:var(--music)}
+import web
+
+CSS = """
 .chips{display:flex;gap:var(--s1);flex-wrap:wrap;margin-top:var(--s2)}
 .chip{font-size:var(--fs-xs);padding:.3rem .55rem;border-radius:var(--r-pill);background:var(--surface-2);border:1px solid var(--border);color:var(--muted);cursor:pointer}
 .chip.on{background:var(--primary-weak);border-color:var(--primary);color:var(--primary)}
+.cbx{width:auto;min-height:0;margin-right:.4em}
+.grow{flex:1;min-width:0}
 #searchResults{display:flex;flex-direction:column;gap:var(--s1);margin-top:var(--s2);max-height:16rem;overflow:auto}
 .sr{display:flex;align-items:center;gap:var(--s2);padding:var(--s2);border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface);cursor:pointer}
 .sr:hover{border-color:var(--border-strong)}
 .sr .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .title{font-weight:var(--fw-med)}
 .who{color:var(--muted);font-size:var(--fs-sm)}
-/* feature bars + axis navigators */
 .bars{display:grid;grid-template-columns:5.2rem 1fr 2.4rem;gap:var(--s1) var(--s2);align-items:center;margin-top:var(--s3)}
 .bars .lab{font-size:var(--fs-xs);color:var(--muted)}
 .bars .val{font-size:var(--fs-xs);color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
@@ -107,14 +41,10 @@ input:focus,select:focus{border-color:var(--primary);outline:none}
 .crate{display:flex;flex-direction:column;gap:var(--s1);margin-bottom:var(--s3)}
 .crate .ci{display:flex;align-items:center;gap:var(--s2);padding:var(--s2);border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface)}
 .crate .ci .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-audio{width:100%;margin-top:var(--s3);border-radius:var(--r-md)}
 .msg{font-size:var(--fs-sm);color:var(--warn);min-height:1.2em}
-.hd2{border-bottom:1px solid var(--border);padding-bottom:var(--s2);margin-bottom:var(--s3);display:flex;align-items:center;gap:var(--s2)}
-.hd2 h2{margin:0}.hd2 .spacer{margin-left:auto}
-</style></head><body>
-<div class="appbar"><h1>WRIT-FM &middot; browse</h1></div>
-<div class="nav"><a href="/admin">station</a><a href="/blocks">blocks</a><a href="/day">24-hour day</a><a href="/now">now</a><a href="/browse" aria-current="page">browse</a></div>
+"""
 
+BODY = """
 <section>
   <div class="row">
     <input id="q" placeholder="search a song / artist to start" autocomplete="off">
@@ -161,10 +91,11 @@ audio{width:100%;margin-top:var(--s3);border-radius:var(--r-md)}
 </section>
 
 <audio id="audio" controls preload="none" hidden></audio>
+"""
 
-<script>
+JS = r"""
 const $=id=>document.getElementById(id);
-const BASE=location.pathname.replace(/\\/(browse)\\/?$/,'').replace(/\\/+$/,'');
+const BASE=location.pathname.replace(/\/(browse)\/?$/,'').replace(/\/+$/,'');
 const API=p=>BASE+'/api/'+p;
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 const AXES=[{k:'energy',n:'Energy'},{k:'valence',n:'Valence'},{k:'acousticness',n:'Acoustic'},
@@ -312,5 +243,6 @@ $('btnClear').onclick=()=>{crate=[];renderCrate();requery();};
   if(seedId){ try{const r=await (await fetch(API('browse/track/'+seedId))).json(); if(r&&r.id)return setSeed(r);}catch(e){} }
   surprise();
 })();
-</script>
-</body></html>"""
+"""
+
+BROWSE_PAGE = web.page("music", "music", BODY, css=CSS, js=JS)

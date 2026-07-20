@@ -1,58 +1,40 @@
 #!/usr/bin/env python3
-"""Programming-blocks admin UI. Same zero-framework convention as panel.py's
-PAGE: one inline HTML/CSS/JS string, fetch()-based, no build step."""
+"""Programming-blocks admin UI. Same zero-framework convention as the other
+pages: fetch()-based, no build step, wrapped in the shared web.page shell so it
+inherits the universal design system + nav + error banner."""
 
-BLOCKS_PAGE = """<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Programming blocks</title>
-<style>
-:root{color-scheme:light dark}
-body{font-family:system-ui,sans-serif;max-width:640px;margin:0 auto;padding:.9rem;line-height:1.4}
-h1{font-size:1.2rem;margin:.2rem 0}
-h2{font-size:.9rem;margin:0;text-transform:uppercase;letter-spacing:.02em;opacity:.6}
-.sub{opacity:.7;font-size:.85rem;margin-bottom:1rem}
-section{margin:0 0 1.4rem}
-section>.hd2{border-bottom:1px solid #8883;padding-bottom:.4rem;margin-bottom:.6rem}
-#editor{border:1px solid #3b82f666;border-radius:16px;padding:1rem;background:#3b82f60d}
-#editor section{margin-bottom:1.2rem}
+import web
+
+CSS = """
+#editor{border:1px solid var(--primary);border-radius:var(--r-lg);padding:var(--s4);background:var(--primary-weak)}
+#editor section{margin-bottom:var(--s5)}
 #editor section:last-child{margin-bottom:0}
-label{display:block;font-size:.78rem;opacity:.75;margin:.55rem 0 .2rem}
-input,select,textarea{width:100%;box-sizing:border-box;font:inherit;padding:.5rem .6rem;border:1px solid #8885;border-radius:10px;background:transparent;color:inherit}
 textarea{min-height:4rem;resize:vertical}
-.row{display:flex;gap:.7rem;flex-wrap:wrap;align-items:flex-end}
 .row>div{flex:1;min-width:8rem}
-button{font:inherit;padding:.5rem 1rem;border:1px solid transparent;border-radius:999px;background:#3b82f6;color:#fff;cursor:pointer;font-size:.85rem}
-button.ghost{background:transparent;color:#3b82f6;border-color:#3b82f680}
-button.danger{background:transparent;color:#ef4444;border-color:#ef444480}
-button:disabled{opacity:.5;cursor:progress}
-.actions{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.6rem}
-.dot{display:inline-block;width:.6rem;height:.6rem;border-radius:50%;background:#888;margin-right:.35rem;vertical-align:middle}
-.dot.ok{background:#22c55e}.dot.bad{background:#ef4444}
-pre{white-space:pre-wrap;background:#8881;padding:.6rem;border-radius:10px;font-size:.78rem;max-height:16rem;overflow:auto}
-audio{width:100%;margin-top:.5rem}
-a{color:#3b82f6}
-.seg{padding:.7rem .8rem;margin-bottom:.7rem;border-radius:12px;border:1px solid #8884;background:rgba(128,128,128,.08)}
+.row>div.w7{flex:0 1 7rem;min-width:0;max-width:7rem}
+.actions{display:flex;gap:var(--s2);flex-wrap:wrap;align-items:center;margin-top:var(--s2)}
+.chk{display:inline-flex;align-items:center;gap:var(--s1);width:auto;font-size:var(--fs-sm);color:var(--text);margin:0}
+.chk input{width:auto;min-height:0}
+.seg{padding:var(--s3);margin-bottom:var(--s3);border-radius:var(--r-md);border:1px solid var(--border);background:var(--surface)}
 .seg:last-child{margin-bottom:0}
-.seg .hd{display:flex;justify-content:space-between;align-items:center;gap:.5rem}
-.seg .hd .left{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;min-width:0}
+.seg .hd{display:flex;justify-content:space-between;align-items:center;gap:var(--s2)}
+.seg .hd .left{display:flex;align-items:center;gap:var(--s1);flex-wrap:wrap;min-width:0}
 .seg .hd .left .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.seg .hd .move{display:flex;gap:.2rem}
-.seg .hd .move button, .seg .hd .kill{padding:.3rem .55rem;font-size:.8rem}
-.badge{font-size:.68rem;padding:.15rem .5rem;border-radius:999px;background:#8883;flex-shrink:0}
-.testmsg{font-size:.8rem;opacity:.8}
-.tracklist{max-height:8rem;overflow:auto;font-size:.8rem;margin-top:.4rem}
-.tracklist div{display:flex;justify-content:space-between;gap:.4rem;padding:.15rem 0}
-.blocklist div{display:flex;justify-content:space-between;gap:.5rem;padding:.5rem 0;border-bottom:1px solid #8882;cursor:pointer}
+.seg .hd .move{display:flex;gap:var(--s1)}
+.seg .hd .move button,.seg .hd .kill{min-height:var(--ctl-h-sm);min-width:var(--ctl-h-sm);padding:0 var(--s2)}
+.testmsg{font-size:var(--fs-sm);color:var(--muted)}
+.tracklist{max-height:8rem;overflow:auto;font-size:var(--fs-sm);margin-top:var(--s2)}
+.tracklist div{display:flex;justify-content:space-between;gap:var(--s2);padding:.15rem 0;align-items:center}
+.blocklist div{display:flex;justify-content:space-between;gap:var(--s2);padding:var(--s2) 0;border-bottom:1px solid var(--border);cursor:pointer}
 .blocklist div:last-child{border-bottom:none}
 .blocklist div:active{opacity:.6}
-.addtype{display:flex;gap:.5rem;flex-wrap:wrap}
-.days{display:flex;gap:.3rem;flex-wrap:wrap;margin:.3rem 0}
-.dayBtn{padding:.3rem .5rem;font-size:.78rem}
-.dayBtn.on{background:#3b82f6;color:#fff;border-color:#3b82f6}
-</style></head><body>
-<h1>Programming blocks</h1>
-<div class="sub"><a href="/admin">&larr; station control</a> &middot; <a href="/day">24-hour day</a> &middot; <a href="/now">▶ now · listen · cast</a> &middot; ai-radio</div>
+.addtype{display:flex;gap:var(--s2);flex-wrap:wrap}
+.days{display:flex;gap:var(--s1);flex-wrap:wrap;margin:var(--s1) 0}
+.dayBtn{min-height:var(--ctl-h-sm);padding:0 var(--s2);font-size:var(--fs-sm)}
+.dayBtn.on{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}
+"""
 
+BODY = """
 <section>
   <div class="hd2"><h2>Blocks</h2></div>
   <div class="blocklist" id="blockList"></div>
@@ -67,7 +49,7 @@ a{color:#3b82f6}
   <label>Title</label>
   <input id="title">
   <div id="segments"></div>
-  <label style="margin-top:.9rem">Add segment</label>
+  <label class="mt3">Add segment</label>
   <div class="addtype">
     <button class="ghost" data-add="live" type="button">+ Live</button>
     <button class="ghost" data-add="tts" type="button">+ TTS</button>
@@ -119,9 +101,10 @@ a{color:#3b82f6}
   </div>
 </section>
 
-<audio id="shared" controls style="width:100%;margin-top:1rem"></audio>
+<audio id="shared" controls></audio>
+"""
 
-<script>
+JS = r"""
 const $=id=>document.getElementById(id);
 const BASE=location.pathname.replace(/\/+$/,'');
 let block=null, liveSources=[], llmBackends=[], ttsEngines=[], previewQueue=[], previewIdx=0;
@@ -202,10 +185,10 @@ function renderSchedule(){
       `<button type="button" class="ghost dayBtn${days.includes(di)?' on':''}" data-day="${di}">${lbl}</button>`).join('');
     d.innerHTML=`<div class="row">
         <div><label>Block</label><select data-sf="block_id"><option value="">(pick block)</option>${blockOptions(e.block_id)}</select></div>
-        <div style="max-width:7rem"><label>Time</label><input type="time" data-sf="time" value="${esc(e.time||'09:00')}"></div>
+        <div class="w7"><label>Time</label><input type="time" data-sf="time" value="${esc(e.time||'09:00')}"></div>
       </div>
       <label>Days (none = daily)</label><div class="days">${dayBtns}</div>
-      <div class="actions"><label style="display:inline">Enabled <input type="checkbox" data-sf="enabled" ${e.enabled!==false?'checked':''} style="width:auto"></label>
+      <div class="actions"><label class="chk">Enabled <input type="checkbox" data-sf="enabled" ${e.enabled!==false?'checked':''}></label>
         <button class="danger" type="button" data-srem="1">Remove</button></div>`;
     d.querySelector('[data-sf="block_id"]').onchange=ev=>e.block_id=ev.target.value;
     d.querySelector('[data-sf="time"]').onchange=ev=>e.time=ev.target.value;
@@ -528,5 +511,6 @@ $('btnMd').onclick=async()=>{
   await loadBlockList();  // populates allBlocks (schedule block dropdowns need it)
   await loadSchedule();
 })();
-</script>
-</body></html>"""
+"""
+
+BLOCKS_PAGE = web.page("blocks", "blocks", BODY, css=CSS, js=JS)
