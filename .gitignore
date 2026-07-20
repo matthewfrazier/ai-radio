@@ -75,6 +75,8 @@ overlay.json
 overlay.json.tmp
 tracklist.json
 features.json
+browse_index.json
+dedup_manifest.json
 feat_s*.json
 .mbid_cache.json
 cast_devices.json

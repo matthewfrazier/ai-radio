@@ -145,7 +145,7 @@ def _segment_summary(segments):
         if s["type"] == "tts":
             parts.append(p.get("topic") or "tts")
         elif s["type"] == "music":
-            parts.append(p.get("query") or "music")
+            parts.append(p.get("query") or ("%d picks" % len(p["track_ids"]) if p.get("track_ids") else "music"))
         elif s["type"] == "live":
             parts.append("news")
     return " · ".join(parts)
@@ -274,7 +274,10 @@ def write_markdown(block):
             if r.get("url"):
                 lines.append(f"- url: {r['url']}")
         elif seg["type"] == "music":
-            lines.append(f"- query: {seg['params'].get('query') or '(shuffle all)'} · duration {seg['params'].get('duration_s')}s")
+            src = seg["params"].get("query") or (
+                "%d hand-picked tracks" % len(seg["params"]["track_ids"])
+                if seg["params"].get("track_ids") else "(shuffle all)")
+            lines.append(f"- query: {src} · duration {seg['params'].get('duration_s')}s")
             if r.get("track_count"):
                 lines.append(f"- tracks: {r['track_count']}")
         elif seg["type"] == "tts":
@@ -341,26 +344,39 @@ def resolve_live_segment(seg, prior_source_ids=()):
 
 
 def resolve_music_segment(seg, bdir):
-    r = jellyfin_client.resolve_music(seg["params"].get("query", ""), limit=200)
+    p = seg["params"]
+    ids = p.get("track_ids")
+    if ids:  # explicit hand-picked crate (from the music browser)
+        tracks = jellyfin_client.tracks_by_ids(ids)
+        r = {"ref": "picks:%d" % len(ids), "title": "%d hand-picked tracks" % len(tracks),
+             "track_count": len(tracks), "tracks": tracks}
+    else:
+        r = jellyfin_client.resolve_music(p.get("query", ""), limit=200)
     playlist_path = f"music_{seg['id']}.txt"
     with open(os.path.join(bdir, playlist_path), "w") as f:
         for t in r["tracks"]:
             f.write("file '%s'\n" % t["url"])
-    # Per-track metadata for the tracks that will actually air (the concat
-    # producer stops at the segment's -t duration), + one buffer track. Lets
-    # the player push the real artist/title as each track boundary passes, and
-    # a recap name what played.
-    budget = seg["params"].get("duration_s", 900)
-    meta, acc = [], 0.0
-    for t in r["tracks"]:
-        meta.append({"name": t["name"], "artist": t.get("artist", ""),
-                     "duration_s": t.get("duration_s", 0)})
-        acc += t.get("duration_s", 0)
-        if acc >= budget:
-            break
+    # Per-track metadata lets the player push the real artist/title as each track
+    # boundary passes and a recap name what played. For a QUERY set, keep only
+    # the tracks that will air within the duration budget (the concat -t cuts the
+    # rest). For an explicit CRATE, keep every pick and set the segment duration
+    # to their total so the whole crate plays (the -t is a cap, not padding).
+    if ids:  # keep every pick; the concat (no -t cap) plays the crate through
+        meta = [{"name": t["name"], "artist": t.get("artist", ""),
+                 "duration_s": t.get("duration_s", 0)} for t in r["tracks"]]
+    else:
+        budget = p.get("duration_s", 900)
+        meta, acc = [], 0.0
+        for t in r["tracks"]:
+            meta.append({"name": t["name"], "artist": t.get("artist", ""),
+                         "duration_s": t.get("duration_s", 0)})
+            acc += t.get("duration_s", 0)
+            if acc >= budget:
+                break
     seg["resolved"] = {"ref": r["ref"], "title": r["title"], "track_count": r["track_count"],
                         "playlist_path": playlist_path, "tracks": meta,
-                        "tracks_head": [track_label(t) for t in meta[:20]]}
+                        "tracks_head": [track_label(t) for t in meta[:20]],
+                        "duration_s": round(sum(m["duration_s"] for m in meta), 1)}
     seg["status"] = "ok"
     seg["resolved_at"] = now_iso()
 

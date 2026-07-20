@@ -106,11 +106,42 @@ def resolve_music(query, limit=200):
     return {"ref": ref, "title": title, "tracks": tracks, "track_count": len(tracks)}
 
 
+def delete_item(base, tok, item_id):
+    """Delete one item (and its file) from Jellyfin. Requires the account to
+    have content-deletion enabled. Returns the HTTP status (204 on success)."""
+    req = urllib.request.Request(base + "/Items/" + item_id, method="DELETE",
+                                 headers={"X-Emby-Token": tok})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.status
+
+
 def _track_artist(i):
     # Jellyfin returns Artists (list) + AlbumArtist by default; prefer the
     # first track artist, fall back to the album artist.
     a = i.get("Artists") or []
     return (a[0] if a else i.get("AlbumArtist")) or ""
+
+
+def tracks_by_ids(ids, limit=500):
+    """Resolve specific tracks by Jellyfin id, in the requested order (Jellyfin
+    doesn't preserve Ids= order). Returns [{id,name,artist,duration_s,url}] for
+    the ids that resolved -- the explicit-track-list path for a hand-picked set.
+    """
+    ids = list(ids)[:limit]
+    if not ids:
+        return []
+    base, tok, uid = auth()
+    items = jget(base, tok, "/Users/%s/Items?Ids=%s&IncludeItemTypes=Audio&Recursive=true&Limit=%d"
+                 % (uid, urllib.parse.quote(",".join(ids)), len(ids)))
+    by_id = {i["Id"]: i for i in items.get("Items", [])}
+    out = []
+    for tid in ids:
+        i = by_id.get(tid)
+        if i:
+            out.append({"id": i["Id"], "name": i.get("Name", i["Id"]), "artist": _track_artist(i),
+                        "duration_s": round((i.get("RunTimeTicks") or 0) / 10_000_000, 1),
+                        "url": track_url(base, tok, i["Id"])})
+    return out
 
 
 if __name__ == "__main__":

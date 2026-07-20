@@ -263,3 +263,37 @@ without a gap).
 anchor), Icecast config (multiple mounts?), `panel.py`/`/now` (which streamer
 / which mount a listener is on). No new deps identified yet; this is a
 research item to be scoped before any build.
+
+## de-duplicate the music library (prune same-recording copies)
+
+**Status: built, blocked on a Jellyfin permission — not yet run.** The library
+has heavy duplication (~5,600 duplicate groups; ~3,900 same-recording copies).
+Detection + a safe pruner are done; executing the delete is deferred.
+
+**What exists.** `music_browser.dedup_key`/`dedup_clusters`/`safe_prune_plan`
+group the *same recording* across copies with a conservative key (strips a
+leading track number + remaster/reissue/mono/stereo markers, but KEEPS live/
+acoustic/demo/remix as distinct takes; generic titles like "[untitled]"/"Intro"
+never merge; a "divergent" guard on duration + audio-feature spread flags
+anything that isn't clearly one recording). `prune_dupes.py` is the runner:
+DRY-RUN by default (writes `dedup_manifest.json`, deletes nothing), `--apply`
+deletes via `jellyfin_client.delete_item`, probing one deletion first to confirm
+permission. Keep policy per group: studio > tagged album > longer take >
+has-year. The browser already folds duplicates in the UI (×N badge) via the same
+key.
+
+**Decided (with the operator).** Auto-prune the ~3,868 *safe* same-recording
+copies (keep the best of each); **keep all live/alternate takes** (the ~2,700
+divergent groups are never pruned). A remote backup exists, so the manifest is
+enough to restore any deletion.
+
+**Blocker.** The `hub` Jellyfin account is admin but has
+`EnableContentDeletion: False`, so every `DELETE /Items/<id>` returns 401. To
+proceed: enable content deletion for that account (Jellyfin → Admin → Users →
+hub → allow media deletion), then `python3 prune_dupes.py` (review the manifest)
+and `python3 prune_dupes.py --apply`. Afterward regenerate
+`library_snapshot.json` + `overlay.py browse-index` so the browser reflects the
+slimmed library.
+
+**Touches (done):** `music_browser.py`, `prune_dupes.py`, `jellyfin_client.py`
+(`delete_item`). No new deps.

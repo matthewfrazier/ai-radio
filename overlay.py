@@ -15,6 +15,7 @@ CLI:
   python3 overlay.py acousticbrainz [N]      # MB->AB pass over first N tracks
   python3 overlay.py essentia <features.json># ingest rac/Essentia output
   python3 overlay.py tags [backend model N]  # LLM mood/theme tags (Claude default)
+  python3 overlay.py browse-index            # compact index for the music browser
   python3 overlay.py stats                   # coverage report
 """
 import json
@@ -25,6 +26,7 @@ import urllib.parse
 import urllib.request
 
 import llm_backends
+import music_browser
 
 BASE = "/opt/writ-fm"
 SNAPSHOT = os.path.join(BASE, "library_snapshot.json")
@@ -378,6 +380,47 @@ def stats(snap, ov):
             "by_source": srcs}
 
 
+# ---------------- compact browse index for the music browser ----------------
+BROWSE_INDEX = os.path.join(BASE, "browse_index.json")
+# The dense similarity space: 6 Essentia 0-1 axes + normalized tempo (99.95%
+# coverage). era/moods/themes/live are carried for faceting, not the distance.
+BROWSE_AXES = ["energy", "valence", "acousticness", "danceability", "instrumental", "tempo_norm"]
+_BROWSE_NEED = ("energy", "valence", "acousticness", "danceability", "instrumental", "tempo_bpm")
+
+
+def tempo_norm(bpm):
+    return max(0.0, min(1.0, (bpm - 40.0) / 160.0))
+
+
+def _best_artist(t):
+    a = t.get("artists") or []
+    return (a[0] if a else "") or t.get("album_artist") or ""
+
+
+def build_browse_index(snap, ov):
+    """Join snapshot metadata + overlay features into one compact record per
+    track (only those with the full numeric vector), so the panel can lazy-load
+    a few MB and do pure-Python nearest-neighbour instead of shipping ~48MB."""
+    recs = []
+    for t in snap["tracks"]:
+        e = ov["tracks"].get(t["id"])
+        if not e or any(k not in e for k in _BROWSE_NEED):
+            continue
+        name, artist = t.get("name") or "", _best_artist(t)
+        recs.append({
+            "id": t["id"], "name": name, "artist": artist,
+            "album": t.get("album") or "", "genres": t.get("genres") or [],
+            "year": t.get("year"), "duration_s": t.get("duration_s"),
+            "era": e.get("era"), "live": bool(e.get("live")),
+            "moods": e.get("moods") or [], "themes": e.get("themes") or [],
+            "bpm": e["tempo_bpm"], "dkey": music_browser.dedup_key(name, artist),
+            "vec": [e["energy"], e["valence"], e["acousticness"],
+                    e["danceability"], e["instrumental"], tempo_norm(e["tempo_bpm"])],
+        })
+    return {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "axes": BROWSE_AXES, "tracks": recs}
+
+
 if __name__ == "__main__":
     import sys
     cmd = sys.argv[1] if len(sys.argv) > 1 else "stats"
@@ -393,6 +436,12 @@ if __name__ == "__main__":
         save_overlay(ov)
         print("live: flagged %d of %d tracks (%.1f%%)" % (n, len(snap["tracks"]),
               100 * n / len(snap["tracks"]) if snap["tracks"] else 0))
+    elif cmd == "browse-index":
+        snap = load_snapshot()
+        idx = build_browse_index(snap, ov)
+        with open(BROWSE_INDEX, "w") as f:
+            json.dump(idx, f)
+        print("browse-index: %d tracks -> %s" % (len(idx["tracks"]), BROWSE_INDEX))
     elif cmd == "acousticbrainz":
         snap = load_snapshot()
         lim = int(sys.argv[2]) if len(sys.argv) > 2 else None
