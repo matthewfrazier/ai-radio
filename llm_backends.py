@@ -10,7 +10,9 @@ import urllib.request
 ANTHROPIC_CONF = "/opt/writ-fm/anthropic.conf"
 
 LLM_BACKENDS = {
-    "ollama": {"label": "Ollama (rac-wsl)", "kind": "ollama", "base_url": "http://rac-wsl:11434"},
+    # rac-wsl tailnet node retired 2026-08-12; WSL ollama now rides the Windows
+    # `rac` node via mirrored networking (fleet directive).
+    "ollama": {"label": "Ollama (rac)", "kind": "ollama", "base_url": "http://rac:11434"},
     "claude": {"label": "Claude API", "kind": "anthropic-api",
                "models": ["claude-sonnet-5", "claude-opus-4-8", "claude-haiku-4-5"]},
 }
