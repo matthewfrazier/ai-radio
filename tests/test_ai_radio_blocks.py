@@ -30,6 +30,8 @@ import live_source  # noqa: E402
 import llm_backends  # noqa: E402
 import music_browser  # noqa: E402
 import panel  # noqa: E402
+import playlist_cast  # noqa: E402
+import playlists  # noqa: E402
 import tts_content  # noqa: E402
 import tts_engines  # noqa: E402
 
@@ -1277,6 +1279,176 @@ class MusicBrowserTests(unittest.TestCase):
         keys = [m["keep"]["id"] for m in plan["manifest"]]
         self.assertIn("k", keys)                       # Dup kept the album copy
         self.assertNotIn("a", keys)                    # divergent Alt group excluded
+
+
+class PlaylistsTests(unittest.TestCase):
+    """Station playlists: CRUD, queue-next dedupe, ordering, Jellyfin mirror."""
+
+    def setUp(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        tmp.close()
+        os.unlink(tmp.name)  # start from no store
+        self.path = tmp.name
+        self.addCleanup(lambda: os.path.exists(self.path) and os.unlink(self.path))
+
+    def test_crud_roundtrip(self):
+        p = playlists.create("Late Night", path=self.path)
+        self.assertEqual(p["track_ids"], [])
+        playlists.rename(p["id"], "Later Night", path=self.path)
+        got = playlists.get(p["id"], path=self.path)
+        self.assertEqual(got["title"], "Later Night")
+        self.assertEqual(len(playlists.list_playlists(self.path)), 1)
+        playlists.delete(p["id"], path=self.path)
+        self.assertEqual(playlists.list_playlists(self.path), [])
+        with self.assertRaises(KeyError):
+            playlists.get(p["id"], path=self.path)
+
+    def test_add_dedupes_and_appends(self):
+        p = playlists.create("Q", track_ids=["a", "b"], path=self.path)
+        playlists.add_tracks(p["id"], ["b", "c", "c", "d"], path=self.path)
+        got = playlists.get(p["id"], path=self.path)
+        self.assertEqual(got["track_ids"], ["a", "b", "c", "d"])  # no double-add
+
+    def test_remove_and_move(self):
+        p = playlists.create("Q", track_ids=["a", "b", "c"], path=self.path)
+        playlists.move_track(p["id"], 2, 0, path=self.path)
+        self.assertEqual(playlists.get(p["id"], path=self.path)["track_ids"], ["c", "a", "b"])
+        playlists.remove_track(p["id"], 1, path=self.path)
+        self.assertEqual(playlists.get(p["id"], path=self.path)["track_ids"], ["c", "b"])
+        playlists.remove_track(p["id"], 99, path=self.path)  # out of range = no-op
+        self.assertEqual(playlists.get(p["id"], path=self.path)["track_ids"], ["c", "b"])
+
+    def test_sync_creates_then_replaces(self):
+        p = playlists.create("Mirror", track_ids=["a", "b"], path=self.path)
+        calls = []
+        with patch.object(jellyfin_client, "auth", return_value=("http://jf", "tok", "uid")), \
+             patch.object(jellyfin_client, "create_playlist",
+                          side_effect=lambda *a: calls.append(("create", a[3], a[4])) or "JF1"), \
+             patch.object(jellyfin_client, "clear_playlist",
+                          side_effect=lambda *a: calls.append(("clear", a[3]))), \
+             patch.object(jellyfin_client, "add_playlist_items",
+                          side_effect=lambda *a: calls.append(("add", a[3], a[4]))):
+            got = playlists.sync_jellyfin(p["id"], path=self.path)
+            self.assertEqual(got["jellyfin_id"], "JF1")
+            self.assertEqual(calls, [("create", "Mirror", ["a", "b"])])
+            calls.clear()
+            playlists.add_tracks(p["id"], ["c"], path=self.path)
+            playlists.sync_jellyfin(p["id"], path=self.path)  # 2nd sync replaces items
+            self.assertEqual(calls, [("clear", "JF1"), ("add", "JF1", ["a", "b", "c"])])
+
+
+class BrowseListTests(unittest.TestCase):
+    """Seedless facet-first browse over the index."""
+
+    _load = MusicBrowserTests._load  # share the tiny index fixture, not the tests
+    _rec = MusicBrowserTests._rec
+
+    def test_browse_filters_and_sorts(self):
+        self._load([
+            self._rec("hi", [0.9, 0.5, 0.5, 0.5, 0.5, 0.5], era="1990s"),
+            self._rec("lo", [0.1, 0.5, 0.5, 0.5, 0.5, 0.5], era="1990s"),
+            self._rec("old", [0.5] * 6, era="1970s"),
+            self._rec("liveone", [0.5] * 6, era="1990s", live=True),
+        ])
+        r = music_browser.browse(era="1990s", sort="energy")
+        self.assertEqual([x["id"] for x in r["results"]], ["hi", "lo"])  # live excluded, desc
+        self.assertEqual(r["total"], 2)
+        r = music_browser.browse(era="1990s", sort="energy", desc=False, studio_only=False)
+        self.assertEqual([x["id"] for x in r["results"]], ["lo", "liveone", "hi"])
+        r = music_browser.browse(sort="name", desc=False, limit=2)
+        self.assertEqual(len(r["results"]), 2)
+        self.assertEqual(r["total"], 3)
+
+    def test_browse_collapses_duplicates(self):
+        self._load([
+            self._rec("a", [0.5] * 6, name="Song", artist="X"),
+            self._rec("b", [0.5] * 6, name="Song (2011 Remaster)", artist="X"),
+            self._rec("c", [0.5] * 6, name="Other", artist="X"),
+        ])
+        r = music_browser.browse(sort="name", desc=False)
+        self.assertEqual(len(r["results"]), 2)
+
+
+class PlaylistCastTests(unittest.TestCase):
+    """The panel-side sequencer: advance on FINISHED, bow out on takeover,
+    give up after consecutive start failures. Driven with fake cast/clock."""
+
+    def _caster(self, script, default=None):
+        """script: list of dicts returned by successive cast() calls; once it
+        runs dry, `default` (IDLE = track over) is returned forever."""
+        calls = []
+        clock = {"t": 0.0}
+
+        def cast(*args):
+            calls.append(args)
+            return script.pop(0) if script else dict(default or {"state": "IDLE"})
+
+        def sleep(s):
+            clock["t"] += max(float(s), 0.1)
+
+        c = playlist_cast.PlaylistCaster(cast, sleep, lambda: clock["t"])
+        return c, calls
+
+    def _track(self, tid, dur=20):
+        return {"id": tid, "name": tid, "artist": "A", "duration_s": dur,
+                "url": "http://jf/%s.mp3" % tid}
+
+    def _run(self, c, tracks):
+        c.start("pl1", "Test", tracks, "uu", ("h", "8009", "m", "Room"), budget=6)
+        c._thread.join(timeout=5)
+        return c.status()
+
+    def test_advances_through_tracks_and_finishes(self):
+        script = [
+            {"state": "PLAYING"},                       # start t1
+            {"state": "IDLE"},                          # t1 finished
+            {"state": "PLAYING"},                       # start t2
+            {"state": "IDLE"},                          # t2 finished
+        ]
+        c, calls = self._caster(script)
+        st = self._run(c, [self._track("t1"), self._track("t2")])
+        self.assertEqual(st["state"], "finished")
+        starts = [a for a in calls if a[0] == "start"]
+        self.assertEqual([a[2] for a in starts], ["http://jf/t1.mp3", "http://jf/t2.mp3"])
+        self.assertEqual(starts[0][9], "BUFFERED")     # not the LIVE station stream
+
+    def test_taken_over_ends_session_without_stopping_device(self):
+        script = [
+            {"state": "PLAYING"},                                        # start t1
+            {"state": "PLAYING", "content_id": "http://youtube/xyz"},    # someone else cast
+        ]
+        c, calls = self._caster(script)
+        st = self._run(c, [self._track("t1"), self._track("t2")])
+        self.assertEqual(st["state"], "taken_over")
+        c.stop()
+        self.assertNotIn("stop", [a[0] for a in calls])  # never yank their cast
+
+    def test_start_failures_skip_then_give_up(self):
+        script = [
+            {"state": "failed", "hint": "asleep"},   # t1 fails -> skip
+            {"state": "PLAYING"},                    # t2 ok
+            {"state": "IDLE"},                       # t2 finished
+        ]
+        c, _ = self._caster(script)
+        st = self._run(c, [self._track("t1"), self._track("t2")])
+        self.assertEqual(st["state"], "finished")
+
+        c2, _ = self._caster([{"state": "failed"}, {"state": "failed"}])
+        st2 = self._run(c2, [self._track("t1"), self._track("t2")])
+        self.assertEqual(st2["state"], "failed")
+
+    def test_stop_stops_receiver(self):
+        # PAUSED keeps extending the track deadline, so the session can only end
+        # via our stop() -- deterministic even with the instant fake clock.
+        c, calls = self._caster([{"state": "PLAYING"}], default={"state": "PAUSED"})
+        c.start("pl1", "Test", [self._track("t1", dur=9999)], "uu", ("h", "8009", "m", "R"))
+        for _ in range(100):
+            if any(a[0] == "start" for a in calls):
+                break
+            time.sleep(0.01)
+        c.stop()
+        self.assertIn("stop", [a[0] for a in calls])
+        self.assertIsNone(c.status())
 
 
 if __name__ == "__main__":

@@ -18,9 +18,10 @@ attempts within a short window.
 
 Commands (all print JSON to stdout):
   list                                           discover devices + groups
-  start <uuid> <url> <ctype> [host port model name budget]   cast a URL to one endpoint
+  start <uuid> <url> <ctype> [host port model name budget stream_type title]
+                                                 cast a URL to one endpoint
   stop  <uuid>                                   stop casting on one endpoint
-  status <uuid>                                  player state of one endpoint
+  status <uuid> [host port]                      player state (direct addr = fast poll)
 """
 import json
 import socket
@@ -87,7 +88,8 @@ def cmd_list():
     return out
 
 
-def cmd_start(target_uuid, url, ctype, host="", port="", model="", name="", budget=None):
+def cmd_start(target_uuid, url, ctype, host="", port="", model="", name="", budget=None,
+              stream_type="LIVE", title="ai-radio"):
     b = max(int(budget), 6) if budget else CONNECT_TIMEOUT
     browser = None
     cc = None
@@ -127,7 +129,7 @@ def cmd_start(target_uuid, url, ctype, host="", port="", model="", name="", budg
                                 "-- try again (it may have just woken up)."}
 
     mc = cc.media_controller
-    mc.play_media(url, content_type=ctype, stream_type="LIVE", title="ai-radio")
+    mc.play_media(url, content_type=ctype, stream_type=stream_type, title=title)
     mc.block_until_active(timeout=min(b, 12))
     # poll for the player to accept the media (BUFFERING/PLAYING). Receivers
     # load LIVE media but sit in PAUSED/IDLE for ~1s until told to play, and a
@@ -178,8 +180,14 @@ def cmd_stop(target_uuid):
     return {"uuid": target_uuid, "name": name, "stopped": True}
 
 
-def cmd_status(target_uuid):
-    cc, browser = _discover(target_uuid)
+def cmd_status(target_uuid, host="", port=""):
+    # A known address connects directly (~1s) -- polling callers (the playlist
+    # caster) can't afford a 10s mDNS discovery per status check.
+    browser = None
+    if host and port:
+        cc = _direct(target_uuid, host, port, "", "")
+    else:
+        cc, browser = _discover(target_uuid)
     if cc is None:
         raise RuntimeError("cast endpoint not found: %s" % target_uuid)
     cc.wait(timeout=CONNECT_TIMEOUT)
@@ -201,11 +209,15 @@ def main(argv):
                             port=argv[6] if len(argv) > 6 else "",
                             model=argv[7] if len(argv) > 7 else "",
                             name=argv[8] if len(argv) > 8 else "",
-                            budget=argv[9] if len(argv) > 9 else None)
+                            budget=argv[9] if len(argv) > 9 else None,
+                            stream_type=argv[10] if len(argv) > 10 else "LIVE",
+                            title=argv[11] if len(argv) > 11 else "ai-radio")
         elif cmd == "stop":
             out = cmd_stop(argv[2])
         elif cmd == "status":
-            out = cmd_status(argv[2])
+            out = cmd_status(argv[2],
+                             host=argv[3] if len(argv) > 3 else "",
+                             port=argv[4] if len(argv) > 4 else "")
         else:
             out = {"error": "unknown command: %s" % cmd}
         print(json.dumps(out))

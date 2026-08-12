@@ -174,6 +174,41 @@ def tracks_by_ids(ids, limit=500):
     return out
 
 
+# --- playlist mirroring (station playlists -> Jellyfin) ----------------------
+
+def _jsend(base, tok, path, body=None, method="POST"):
+    req = urllib.request.Request(
+        base + path, data=(json.dumps(body).encode() if body is not None else None),
+        method=method, headers={"X-Emby-Token": tok, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=25) as r:
+        raw = r.read()
+    return json.loads(raw) if raw.strip() else {}
+
+
+def create_playlist(base, tok, uid, name, ids):
+    """Create a Jellyfin audio playlist with these items; returns its id."""
+    r = _jsend(base, tok, "/Playlists",
+               {"Name": name, "Ids": list(ids), "UserId": uid, "MediaType": "Audio"})
+    return r["Id"]
+
+
+def add_playlist_items(base, tok, uid, playlist_id, ids):
+    # Chunked like tracks_by_ids: Ids= lives in the query string and 414s at bulk.
+    ids = list(ids)
+    for c in range(0, len(ids), 100):
+        _jsend(base, tok, "/Playlists/%s/Items?Ids=%s&UserId=%s"
+               % (playlist_id, urllib.parse.quote(",".join(ids[c:c + 100])), uid))
+
+
+def clear_playlist(base, tok, uid, playlist_id):
+    """Remove every item (by PlaylistItemId) so a sync can re-add in our order."""
+    items = jget(base, tok, "/Playlists/%s/Items?UserId=%s" % (playlist_id, uid))
+    eids = [str(i["PlaylistItemId"]) for i in items.get("Items", []) if "PlaylistItemId" in i]
+    for c in range(0, len(eids), 100):
+        _jsend(base, tok, "/Playlists/%s/Items?EntryIds=%s"
+               % (playlist_id, urllib.parse.quote(",".join(eids[c:c + 100]))), method="DELETE")
+
+
 if __name__ == "__main__":
     import sys
     q = sys.argv[1] if len(sys.argv) > 1 else ""

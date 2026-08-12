@@ -32,6 +32,8 @@ import live_source
 import llm_backends
 import music_browser
 import now_page
+import playlist_cast
+import playlists
 import tts_engines
 import web
 
@@ -450,6 +452,27 @@ def _with_urls(recs):
         return [dict(r) for r in recs]
 
 
+# One playlist cast session at a time (mirrors the single station cast target).
+_PL_CASTER = playlist_cast.PlaylistCaster(_cast, time.sleep, time.time, _log_cast)
+
+
+def _playlist_tracks(p):
+    """Resolve a playlist's ids to full records + playable URLs. Ids missing
+    from the browse index (pruned/renamed in Jellyfin) still get a stub row so
+    the playlist stays editable rather than silently shrinking."""
+    recs = [music_browser.get(tid) or {"id": tid, "name": tid, "artist": "", "duration_s": 0}
+            for tid in p["track_ids"]]
+    return _with_urls(recs)
+
+
+def _playlist_summary(p):
+    dur = 0
+    for tid in p["track_ids"]:
+        r = music_browser.get(tid)
+        dur += (r or {}).get("duration_s") or 0
+    return {**p, "track_count": len(p["track_ids"]), "duration_s": round(dur, 1)}
+
+
 # --- live on-air state -------------------------------------------------------
 # The panel OWNS the live state in memory. The player pushes an event on every
 # transition (render-start / segment-start / each track boundary / idle) to
@@ -486,7 +509,8 @@ def now_state():
     active = bool(_LAST_PUSH and time.time() - _LAST_PUSH < 12)
     return {"player_active": active, "state": st,
             "queue": block_render.load_queue(), "stream": icecast_status(),
-            "stream_url": STREAM_URL, "cast": _cast_target_read()}
+            "stream_url": STREAM_URL, "cast": _cast_target_read(),
+            "playlist_cast": _PL_CASTER.status()}
 
 
 def _receive_state(st):
@@ -817,8 +841,32 @@ class H(BaseHTTPRequestHandler):
                         moods=(moods.split(",") if moods else None))
                     return self._send(200, "application/json", json.dumps(
                         {"seed": music_browser.get(route[2]), "results": _with_urls(res)}).encode())
-            except FileNotFoundError:
-                return self._send(404, "text/plain", b"not found")
+                if route == ["browse", "list"]:
+                    q = parse_qs(u.query)
+                    moods = q.get("moods", [""])[0]
+                    themes = q.get("themes", [""])[0]
+                    r = music_browser.browse(
+                        studio_only=q.get("studio", ["1"])[0] not in ("0", "false"),
+                        era=(q.get("era", [""])[0] or None),
+                        moods=(moods.split(",") if moods else None),
+                        themes=(themes.split(",") if themes else None),
+                        genre=(q.get("genre", [""])[0] or None),
+                        sort=(q.get("sort", [""])[0] or None),
+                        desc=q.get("dir", ["desc"])[0] != "asc",
+                        limit=int(q.get("k", ["60"])[0]))
+                    return self._send(200, "application/json", json.dumps(
+                        {"total": r["total"], "results": _with_urls(r["results"])}).encode())
+                if route == ["playlists"]:
+                    return self._send(200, "application/json", json.dumps(
+                        {"playlists": [_playlist_summary(p) for p in playlists.list_playlists()]}).encode())
+                if len(route) == 2 and route[0] == "playlists":
+                    p = playlists.get(route[1])
+                    return self._send(200, "application/json", json.dumps(
+                        {**_playlist_summary(p), "tracks": _playlist_tracks(p)}).encode())
+                if route == ["playlist_cast"]:
+                    return self._send(200, "application/json", json.dumps(_PL_CASTER.status()).encode())
+            except (FileNotFoundError, KeyError) as e:
+                return self._send(404, "text/plain", (str(e) or "not found").encode())
             except Exception as e:
                 return self._send(502, "text/plain", str(e).encode())
         self._send(404, "text/plain", b"not found")
@@ -885,6 +933,9 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, "application/json", json.dumps(result).encode())
                 if route == ["cast", "start"]:
                     uuid = body["uuid"]
+                    pl = _PL_CASTER.status()
+                    if pl and pl.get("uuid") == uuid:
+                        _PL_CASTER.stop(quiet=True)  # station stream takes the device over
                     host, port, model, name = _cast_device(uuid)
                     budget = _cast_budget(uuid)
                     r = _cast("start", uuid, _cast_stream_url(), "audio/mpeg",
@@ -995,8 +1046,58 @@ class H(BaseHTTPRequestHandler):
                     if air in ("now", "queue"):
                         schedule_block(block["id"], air, prerender=False)
                     return self._send(200, "application/json", json.dumps({"block": block, "aired": air}).encode())
-            except FileNotFoundError:
-                return self._send(404, "text/plain", b"not found")
+                if route == ["playlists"]:
+                    p = playlists.create(body.get("title", ""), body.get("track_ids"))
+                    return self._send(200, "application/json", json.dumps(_playlist_summary(p)).encode())
+                if len(route) == 2 and route[0] == "playlists":
+                    op = body.get("op")
+                    if op == "add":
+                        p = playlists.add_tracks(route[1], body.get("track_ids") or [])
+                    elif op == "remove":
+                        p = playlists.remove_track(route[1], int(body["index"]))
+                    elif op == "move":
+                        p = playlists.move_track(route[1], int(body["index"]), int(body["to"]))
+                    elif op == "rename":
+                        p = playlists.rename(route[1], body.get("title", ""))
+                    else:
+                        return self._send(400, "text/plain", ("unknown op: %s" % op).encode())
+                    return self._send(200, "application/json", json.dumps(
+                        {**_playlist_summary(p), "tracks": _playlist_tracks(p)}).encode())
+                if len(route) == 3 and route[0] == "playlists" and route[2] == "sync":
+                    p = playlists.sync_jellyfin(route[1])
+                    return self._send(200, "application/json", json.dumps(_playlist_summary(p)).encode())
+                if len(route) == 3 and route[0] == "playlists" and route[2] == "air":
+                    # A playlist on air = one explicit-track-list music block.
+                    p = playlists.get(route[1])
+                    if not p["track_ids"]:
+                        return self._send(400, "text/plain", b"empty playlist")
+                    seg = {"id": "music_1", "role": "music_1", "type": "music",
+                           "params": {"track_ids": p["track_ids"], "duration_s": 0}}
+                    block = block_render.create_block_from_segments(p["title"], [seg])
+                    air = body.get("air", "queue")
+                    if air in ("now", "queue"):
+                        schedule_block(block["id"], air, prerender=False)
+                    return self._send(200, "application/json", json.dumps({"block": block, "aired": air}).encode())
+                if len(route) == 3 and route[0] == "playlists" and route[2] == "cast":
+                    p = playlists.get(route[1])
+                    tracks = [t for t in _playlist_tracks(p) if t.get("url")]
+                    if not tracks:
+                        return self._send(400, "text/plain", b"no playable tracks")
+                    uuid = body["uuid"]
+                    device = _cast_device(uuid)
+                    tgt = _cast_target_read()
+                    if tgt and tgt.get("uuid") == uuid:
+                        _cast_target_clear()  # the playlist replaces the station on this device
+                    st = _PL_CASTER.start(p["id"], p["title"], tracks, uuid, device,
+                                          budget=_cast_budget(uuid))
+                    _log_cast("playlist '%s' -> %s (%d tracks)" % (p["title"], device[3] or uuid, len(tracks)))
+                    return self._send(200, "application/json", json.dumps(st).encode())
+                if route == ["playlist_cast", "stop"]:
+                    st = _PL_CASTER.stop()
+                    _log_cast("playlist cast stopped")
+                    return self._send(200, "application/json", json.dumps({"ok": True, "was": st}).encode())
+            except (FileNotFoundError, KeyError) as e:
+                return self._send(404, "text/plain", (str(e) or "not found").encode())
             except Exception as e:
                 return self._send(502, "text/plain", str(e).encode())
         self._send(404, "text/plain", b"not found")
@@ -1012,6 +1113,13 @@ class H(BaseHTTPRequestHandler):
         if route is not None and len(route) == 2 and route[0] == "day":
             try:
                 return self._send(200, "application/json", json.dumps(day_program.delete_day(route[1])).encode())
+            except Exception as e:
+                return self._send(502, "text/plain", str(e).encode())
+        if route is not None and len(route) == 2 and route[0] == "playlists":
+            try:
+                return self._send(200, "application/json", json.dumps(playlists.delete(route[1])).encode())
+            except KeyError:
+                return self._send(404, "text/plain", b"not found")
             except Exception as e:
                 return self._send(502, "text/plain", str(e).encode())
         self._send(404, "text/plain", b"not found")

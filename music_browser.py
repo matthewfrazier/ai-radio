@@ -203,6 +203,37 @@ def search(q, limit=30, collapse=True):
     return out
 
 
+def browse(studio_only=True, era=None, moods=None, themes=None, genre=None,
+           sort=None, desc=True, limit=60, collapse=True):
+    """Seedless facet-first listing: every track passing the filters, ordered by
+    an axis / bpm / name, or randomly sampled when sort is None ('show me upbeat
+    90s'). Duplicates fold like nearest()."""
+    load_index()
+    ms = _nset(moods) if moods else None
+    ths = _nset(themes) if themes else None
+    g = genre.lower() if genre else None
+    idxs = [i for i in range(len(_IDS)) if _passes(i, studio_only, era, ms, ths, g)]
+    total = len(idxs)
+    if sort in AXES:
+        ax = AXES.index(sort)
+        idxs.sort(key=lambda i: _VECS[i][ax], reverse=desc)
+    elif sort == "name":
+        idxs.sort(key=lambda i: (_META[_IDS[i]].get("name") or "").lower())
+    else:
+        random.shuffle(idxs)
+    out, seen = [], set()
+    for i in idxs:
+        r = _META[_IDS[i]]
+        key = _dkey(r) if collapse else i
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+        if len(out) >= limit:
+            break
+    return {"total": total, "results": out}
+
+
 def _keep_rank(r):
     """Higher sorts first = the copy to KEEP: prefer studio over live, a copy
     that sits on a tagged album, the longer take, then a known year."""
