@@ -22,6 +22,10 @@ CSS = """
 .sr .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .title{font-weight:var(--fw-med)}
 .who{color:var(--muted);font-size:var(--fs-sm)}
+.t2{flex:1;min-width:0}
+.t2 .title,.t2 .l2{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.t2 .l2{font-size:var(--fs-sm)}
+.t2 .alb{color:var(--muted)}
 .bars{display:grid;grid-template-columns:5.2rem 1fr 2.4rem;gap:var(--s1) var(--s2);align-items:center;margin-top:var(--s3)}
 .bars .lab{font-size:var(--fs-xs);color:var(--muted)}
 .bars .val{font-size:var(--fs-xs);color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
@@ -47,6 +51,11 @@ CSS = """
 .selgrp{display:flex;gap:var(--s1);align-items:center;flex-wrap:wrap}
 .selgrp select{min-width:9rem}
 #castStatus{font-variant-numeric:tabular-nums}
+body{padding-bottom:5.5rem}
+#player{position:fixed;left:0;right:0;bottom:0;z-index:20;display:flex;align-items:center;gap:var(--s2);
+  padding:var(--s2) var(--s3);background:var(--surface);border-top:1px solid var(--border-strong);
+  box-shadow:0 -2px 12px rgba(0,0,0,.12)}
+#player audio{height:2.2rem;max-width:46%;flex:0 1 auto}
 """
 
 BODY = """
@@ -57,6 +66,30 @@ BODY = """
     <button class="ghost mini" id="btnBrowse" type="button">☰ Browse all</button>
   </div>
   <div id="searchResults"></div>
+</section>
+
+<section id="plSection">
+  <div class="hd2"><h2>Playlists</h2><span class="spacer sub" id="plInfo"></span></div>
+  <div class="row selgrp">
+    <select id="plSelect"></select>
+    <input id="plName" class="grow" placeholder="new playlist name" autocomplete="off">
+    <button class="mini" id="plNew" type="button">New</button>
+    <button class="ghost mini" id="plRename" type="button">Rename</button>
+    <button class="danger mini" id="plDelete" type="button">Delete</button>
+  </div>
+  <div id="plTracks" class="crate mt3"></div>
+  <div class="row">
+    <button class="mini" id="plQueue" type="button">Queue on air</button>
+    <button class="mini" id="plNow" type="button">On air now</button>
+    <button class="ghost mini" id="plSync" type="button">Sync to Jellyfin</button>
+  </div>
+  <div class="row mt2 selgrp">
+    <select id="castSelect"><option value="">cast to…</option></select>
+    <button class="mini" id="plCast" type="button">Cast</button>
+    <button class="ghost mini" id="plCastStop" type="button">Stop</button>
+    <span class="sub" id="castStatus"></span>
+  </div>
+  <div class="msg" id="plMsg"></div>
 </section>
 
 <section id="filterSection">
@@ -98,31 +131,11 @@ BODY = """
   <div id="results" class="reslist"></div>
 </section>
 
-<section id="plSection">
-  <div class="hd2"><h2>Playlists</h2><span class="spacer sub" id="plInfo"></span></div>
-  <div class="row selgrp">
-    <select id="plSelect"></select>
-    <input id="plName" class="grow" placeholder="new playlist name" autocomplete="off">
-    <button class="mini" id="plNew" type="button">New</button>
-    <button class="ghost mini" id="plRename" type="button">Rename</button>
-    <button class="danger mini" id="plDelete" type="button">Delete</button>
-  </div>
-  <div id="plTracks" class="crate mt3"></div>
-  <div class="row">
-    <button class="mini" id="plQueue" type="button">Queue on air</button>
-    <button class="mini" id="plNow" type="button">On air now</button>
-    <button class="ghost mini" id="plSync" type="button">Sync to Jellyfin</button>
-  </div>
-  <div class="row mt2 selgrp">
-    <select id="castSelect"><option value="">cast to…</option></select>
-    <button class="mini" id="plCast" type="button">Cast</button>
-    <button class="ghost mini" id="plCastStop" type="button">Stop</button>
-    <span class="sub" id="castStatus"></span>
-  </div>
-  <div class="msg" id="plMsg"></div>
-</section>
-
-<audio id="audio" controls preload="none" hidden></audio>
+<div id="player" hidden>
+  <span class="t2"><span class="title" id="npTitle"></span><span class="l2" id="npWho"></span></span>
+  <audio id="audio" controls preload="none"></audio>
+  <button class="ghost icon-btn" id="npStop" type="button" title="stop playback">✕</button>
+</div>
 """
 
 JS = r"""
@@ -141,7 +154,14 @@ let pls=[], curPl=null, devices=[];
 
 function label(r){return (r.artist? r.artist+' — ':'')+(r.name||r.id);}
 function bpmOf(r){return Math.round(r.bpm||(40+ (r.vec?r.vec[5]:0)*160));}
-function play(url){const a=$('audio');a.hidden=false;a.src=url;a.play().catch(()=>{});}
+function play(r){
+  if(!r||!r.url)return;
+  $('npTitle').textContent=r.name||r.id;
+  $('npWho').textContent=(r.artist||'')+(r.album?' · '+r.album:'');
+  $('player').hidden=false;
+  const a=$('audio');a.src=r.url;a.play().catch(()=>{});
+}
+function stopPlay(){const a=$('audio');a.pause();a.removeAttribute('src');a.load();$('player').hidden=true;}
 function fmtDur(s){s=Math.round(s||0);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');}
 function filters(){return {studio_only:!incLive,era:fEra,moods:[...fMoods],themes:[...fThemes]};}
 function filterQS(){const p=new URLSearchParams();p.set('studio',incLive?'0':'1');
@@ -171,7 +191,7 @@ function resRow(r,{score}={}){
   const sc=score&&r.score!=null?`<span class="score">${Math.round(r.score*100)}</span>`:'';
   return `<div class="res" data-id="${esc(r.id)}">
     <div class="hd">${sc}
-      <span class="who"><span class="title">${esc(r.name||r.id)}</span> <span class="sub">${esc(r.artist||'')}</span></span>${dup}
+      <span class="t2"><span class="title">${esc(r.name||r.id)}</span><span class="l2">${esc(r.artist||'')}${r.album?` <span class="alb">${esc(r.album)}</span>`:''}</span></span>${dup}
       <span class="ctl">
         <button class="ghost icon-btn" data-play type="button" title="preview">▶</button>
         <button class="ghost icon-btn" data-seed type="button" title="explore from here">↻</button>
@@ -182,7 +202,7 @@ function resRow(r,{score}={}){
 function wireRows(container,res){
   container.querySelectorAll('.res').forEach(el=>{
     const r=res.find(x=>x.id===el.dataset.id); if(!r)return;
-    el.querySelector('[data-play]').onclick=()=>r.url&&play(r.url);
+    el.querySelector('[data-play]').onclick=()=>play(r);
     el.querySelector('[data-seed]').onclick=()=>setSeed(r);
     el.querySelector('[data-add]').onclick=()=>addToPl(r);
   });
@@ -213,7 +233,7 @@ function renderSeed(){
       <button class="mini" id="seedAdd" type="button" title="add to playlist">+</button></div>
     <div class="row mt2">${badges}</div>
     <div class="chips">${chips}</div><div class="bars">${rows}</div>`;
-  $('seedPlay').onclick=()=>seed.url&&play(seed.url);
+  $('seedPlay').onclick=()=>play(seed);
   $('seedAdd').onclick=()=>addToPl(seed);
 }
 
@@ -257,12 +277,12 @@ function doSearch(){
     const res=d.results||[], groups=[];
     res.forEach(r=>{const a=r.artist||'unknown artist';let g=groups.find(x=>x.a===a);if(!g)groups.push(g={a,rs:[]});g.rs.push(r);});
     $('searchResults').innerHTML=groups.map(g=>`<div class="gart">${esc(g.a)}</div>`+g.rs.map(r=>`<div class="sr" data-id="${esc(r.id)}">
-      <span class="t"><span class="title">${esc(r.name||r.id)}</span>${r.album?` <span class="who">${esc(r.album)}</span>`:''}</span>
+      <span class="t2"><span class="title">${esc(r.name||r.id)}</span><span class="l2">${esc(r.artist||'')}${r.album?` <span class="alb">${esc(r.album)}</span>`:''}</span></span>
       ${r.dupes>1?`<span class="badge" title="${r.dupes} copies">×${r.dupes}</span>`:''}
       <button class="ghost icon-btn" data-play type="button" title="preview">▶</button>
       <button class="mini" data-add type="button" title="add to playlist">+</button></div>`).join('')).join('')||'<span class="sub">no matches</span>';
     $('searchResults').querySelectorAll('.sr').forEach(el=>{const r=res.find(x=>x.id===el.dataset.id);
-      el.querySelector('[data-play]').onclick=(e)=>{e.stopPropagation();r.url&&play(r.url);};
+      el.querySelector('[data-play]').onclick=(e)=>{e.stopPropagation();play(r);};
       el.querySelector('[data-add]').onclick=(e)=>{e.stopPropagation();addToPl(r);};
       el.onclick=()=>setSeed(r);});
   }).catch(()=>{});
@@ -280,13 +300,13 @@ function renderPl(){
   const t=curPl.tracks||[];
   $('plInfo').textContent=curPl.title+' · '+t.length+' track'+(t.length===1?'':'s')+(curPl.duration_s?' · '+fmtDur(curPl.duration_s):'')+(curPl.jellyfin_id?' · synced':'');
   $('plTracks').innerHTML=t.map((c,i)=>`<div class="ci" data-i="${i}">
-    <span class="badge">${i+1}</span><span class="t"><span class="title">${esc(c.name||c.id)}</span> <span class="sub">${esc(c.artist||'')}${c.duration_s?' · '+fmtDur(c.duration_s):''}</span></span>
+    <span class="badge">${i+1}</span><span class="t2"><span class="title">${esc(c.name||c.id)}</span><span class="l2">${esc(c.artist||'')}${c.album?` <span class="alb">${esc(c.album)}</span>`:''}${c.duration_s?` <span class="alb">· ${fmtDur(c.duration_s)}</span>`:''}</span></span>
     <button class="ghost icon-btn" data-up type="button" title="earlier">↑</button>
     <button class="ghost icon-btn" data-dn type="button" title="later">↓</button>
     <button class="ghost icon-btn" data-p type="button" title="preview">▶</button>
     <button class="danger icon-btn" data-x type="button" title="remove">✕</button></div>`).join('')||'<span class="sub">empty — + any track above to queue it here</span>';
   $('plTracks').querySelectorAll('.ci').forEach(el=>{const i=+el.dataset.i;
-    el.querySelector('[data-p]').onclick=()=>t[i].url&&play(t[i].url);
+    el.querySelector('[data-p]').onclick=()=>play(t[i]);
     el.querySelector('[data-x]').onclick=()=>plOp({op:'remove',index:i});
     el.querySelector('[data-up]').onclick=()=>i>0&&plOp({op:'move',index:i,to:i-1});
     el.querySelector('[data-dn]').onclick=()=>i<t.length-1&&plOp({op:'move',index:i,to:i+1});});
@@ -378,6 +398,7 @@ $('plNow').onclick=()=>airPl('now');
 $('plSync').onclick=syncPl;
 $('plCast').onclick=castPl;
 $('plCastStop').onclick=stopCast;
+$('npStop').onclick=stopPlay;
 
 (async function init(){
   await loadMeta(); loadPls(); loadDevices(); pollCast();
